@@ -72,13 +72,96 @@ static int is_block_end(Parser *p) {
 
 /* Forward declarations */
 static ASTNode *parse_expression(Parser *p);
+static ASTNode *parse_comparison(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static void parse_block(Parser *p, NodeList *list);
 
 /* ---- Expression parsing ---- */
 
+/* Check if current matches a word, and the next matches another */
+static int check_two_words(Parser *p, const char *w1, const char *w2) {
+    return check_word(p, w1) &&
+           p->pos + 1 < p->count &&
+           p->tokens[p->pos + 1].type == TOK_WORD &&
+           strcmp(p->tokens[p->pos + 1].value, w2) == 0;
+}
+
+
 static ASTNode *parse_primary(Parser *p) {
     Token *tok = current(p);
+
+    /* Named math operations: "the sum of X and Y" → X + Y
+     * "the" is stripped by normalizer in mid-expression, so we check for
+     * "sum of", "product of", "difference of", "quotient of" */
+    if (check_two_words(p, "sum", "of")) {
+        Token *op = advance_parser(p); advance_parser(p); /* consume "sum of" */
+        ASTNode *left = parse_comparison(p);
+        expect_word(p, "and", "expected 'and' after first operand in 'the sum of X and Y'");
+        ASTNode *right = parse_comparison(p);
+        return ast_binary(left, "+", right, op->line, op->col);
+    }
+    if (check_two_words(p, "difference", "of") || check_two_words(p, "difference", "between")) {
+        Token *op = advance_parser(p); advance_parser(p);
+        ASTNode *left = parse_comparison(p);
+        if (check_word(p, "and") || check_word(p, "from")) advance_parser(p);
+        else babel_error_at_token(current(p), "expected 'and' in 'the difference of X and Y'");
+        ASTNode *right = parse_comparison(p);
+        return ast_binary(left, "-", right, op->line, op->col);
+    }
+    if (check_two_words(p, "product", "of")) {
+        Token *op = advance_parser(p); advance_parser(p);
+        ASTNode *left = parse_comparison(p);
+        expect_word(p, "and", "expected 'and' in 'the product of X and Y'");
+        ASTNode *right = parse_comparison(p);
+        return ast_binary(left, "*", right, op->line, op->col);
+    }
+    if (check_two_words(p, "quotient", "of")) {
+        Token *op = advance_parser(p); advance_parser(p);
+        ASTNode *left = parse_comparison(p);
+        expect_word(p, "and", "expected 'and' in 'the quotient of X and Y'");
+        ASTNode *right = parse_comparison(p);
+        return ast_binary(left, "/", right, op->line, op->col);
+    }
+    if (check_two_words(p, "remainder", "of")) {
+        Token *op = advance_parser(p); advance_parser(p);
+        ASTNode *left = parse_comparison(p);
+        if (check_word(p, "and")) advance_parser(p);
+        else expect_word(p, "divided", "expected 'and' or 'divided by' in remainder expression");
+        if (check_word(p, "by")) advance_parser(p); /* consume optional "by" after "divided" */
+        ASTNode *right = parse_comparison(p);
+        return ast_binary(left, "%", right, op->line, op->col);
+    }
+
+    /* "the result of calling NAME with ARGS" / "the result of NAME(ARGS)" */
+    if (check_two_words(p, "result", "of")) {
+        advance_parser(p); advance_parser(p); /* consume "result of" */
+        /* "calling NAME with" → rewrite to "call NAME with" for the call parser */
+        if (check_word(p, "calling")) {
+            /* Replace "calling" with "call" conceptually — just skip it
+             * and emit a call-style parse */
+            advance_parser(p); /* skip "calling" */
+            /* Inject "call" behavior: parse as call NAME with ARGS */
+            Token *name = expect_type(p, TOK_WORD, "expected function name after 'result of calling'");
+            int arg_cap = 8;
+            ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
+            int arg_count = 0;
+            if (check_word(p, "with")) {
+                advance_parser(p);
+                args[arg_count++] = parse_comparison(p);
+                while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                    advance_parser(p);
+                    if (arg_count >= arg_cap) {
+                        arg_cap *= 2;
+                        args = realloc(args, sizeof(ASTNode *) * arg_cap);
+                    }
+                    args[arg_count++] = parse_comparison(p);
+                }
+            }
+            return ast_function_call(name->value, args, arg_count, tok->line, tok->col);
+        }
+        /* Otherwise parse whatever follows (e.g., name(args)) */
+        return parse_primary(p);
+    }
 
     if (tok->type == TOK_NUMBER) {
         advance_parser(p);
@@ -88,6 +171,31 @@ static ASTNode *parse_primary(Parser *p) {
     if (tok->type == TOK_STRING) {
         advance_parser(p);
         return ast_string_lit(tok->value, tok->line, tok->col);
+    }
+
+    /* "call NAME with ARGS" in expression context.
+     * Arguments are separated by "and" or ",".
+     * We parse each argument with parse_comparison (not full parse_expression)
+     * so that "and" acts as separator, not boolean AND. */
+    if (tok->type == TOK_WORD && strcmp(tok->value, "call") == 0) {
+        advance_parser(p); /* consume 'call' */
+        Token *name = expect_type(p, TOK_WORD, "expected function name after 'call'");
+        int arg_cap = 8;
+        ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
+        int arg_count = 0;
+        if (check_word(p, "with")) {
+            advance_parser(p);
+            args[arg_count++] = parse_comparison(p);
+            while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                advance_parser(p);
+                if (arg_count >= arg_cap) {
+                    arg_cap *= 2;
+                    args = realloc(args, sizeof(ASTNode *) * arg_cap);
+                }
+                args[arg_count++] = parse_comparison(p);
+            }
+        }
+        return ast_function_call(name->value, args, arg_count, tok->line, tok->col);
     }
 
     if (tok->type == TOK_WORD) {
@@ -103,8 +211,28 @@ static ASTNode *parse_primary(Parser *p) {
             advance_parser(p);
             return ast_nothing_lit(tok->line, tok->col);
         }
-        /* Identifier */
+        /* Identifier — check for function call with parens */
         advance_parser(p);
+        if (check_type(p, TOK_LPAREN)) {
+            /* Function call: name(arg1, arg2, ...) */
+            advance_parser(p); /* consume '(' */
+            int arg_cap = 8;
+            ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
+            int arg_count = 0;
+            if (!check_type(p, TOK_RPAREN)) {
+                args[arg_count++] = parse_expression(p);
+                while (check_type(p, TOK_COMMA)) {
+                    advance_parser(p);
+                    if (arg_count >= arg_cap) {
+                        arg_cap *= 2;
+                        args = realloc(args, sizeof(ASTNode *) * arg_cap);
+                    }
+                    args[arg_count++] = parse_expression(p);
+                }
+            }
+            expect_type(p, TOK_RPAREN, "expected ')' after function arguments");
+            return ast_function_call(tok->value, args, arg_count, tok->line, tok->col);
+        }
         return ast_identifier(tok->value, tok->line, tok->col);
     }
 
@@ -398,12 +526,75 @@ static ASTNode *parse_loop_stmt(Parser *p) {
     return node;
 }
 
+/* Parse a parameter list: "a and b and c" or "a, b, c" */
+static void parse_param_list(Parser *p, char ***out_params, int *out_count) {
+    int cap = 8;
+    char **params = malloc(sizeof(char *) * cap);
+    int count = 0;
+
+    Token *first = expect_type(p, TOK_WORD, "expected parameter name");
+    params[count++] = str_dup_parser(first->value);
+
+    while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+        advance_parser(p); /* consume 'and' or ',' */
+        if (count >= cap) { cap *= 2; params = realloc(params, sizeof(char *) * cap); }
+        Token *param = expect_type(p, TOK_WORD, "expected parameter name");
+        params[count++] = str_dup_parser(param->value);
+    }
+
+    *out_params = params;
+    *out_count = count;
+}
+
+static ASTNode *parse_function_def(Parser *p) {
+    Token *tok = advance_parser(p); /* consume 'function' */
+    Token *name = expect_type(p, TOK_WORD, "expected function name");
+
+    char **params = NULL;
+    int param_count = 0;
+
+    /* Optional parameter list: "taking a and b" or "taking a, b" */
+    if (check_word(p, "taking") || check_word(p, "with")) {
+        advance_parser(p);
+        parse_param_list(p, &params, &param_count);
+    }
+
+    skip_newlines(p);
+
+    ASTNode *node = ast_function_def(name->value, params, param_count, tok->line, tok->col);
+    parse_block(p, &node->as.func_def.body);
+
+    expect_word(p, "end", "expected 'end' to close function definition");
+    return node;
+}
+
+static ASTNode *parse_return(Parser *p) {
+    Token *tok = advance_parser(p); /* consume 'return' */
+    ASTNode *value = NULL;
+    /* Return has a value unless followed by newline/EOF/end */
+    if (!check_type(p, TOK_NEWLINE) && !check_type(p, TOK_EOF) &&
+        !check_word(p, "end")) {
+        value = parse_expression(p);
+    }
+    return ast_return(value, tok->line, tok->col);
+}
+
 static ASTNode *parse_statement(Parser *p) {
     Token *tok = current(p);
 
     /* Print statement */
     if (tok->type == TOK_WORD && is_print_keyword(tok->value)) {
         return parse_print_stmt(p);
+    }
+
+    /* Function definition */
+    if (check_word(p, "function")) {
+        return parse_function_def(p);
+    }
+
+    /* Return statement */
+    if (check_word(p, "return")) {
+        return parse_return(p);
     }
 
     /* If statement */

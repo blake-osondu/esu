@@ -92,6 +92,29 @@ ASTNode *ast_unary(const char *op, ASTNode *operand, int line, int col) {
     return node;
 }
 
+ASTNode *ast_function_def(const char *name, char **params, int param_count, int line, int col) {
+    ASTNode *node = ast_new(NODE_FUNCTION_DEF, line, col);
+    node->as.func_def.name = str_dup(name);
+    node->as.func_def.params = params;
+    node->as.func_def.param_count = param_count;
+    node_list_init(&node->as.func_def.body);
+    return node;
+}
+
+ASTNode *ast_function_call(const char *name, ASTNode **args, int arg_count, int line, int col) {
+    ASTNode *node = ast_new(NODE_FUNCTION_CALL, line, col);
+    node->as.func_call.name = str_dup(name);
+    node->as.func_call.args = args;
+    node->as.func_call.arg_count = arg_count;
+    return node;
+}
+
+ASTNode *ast_return(ASTNode *value, int line, int col) {
+    ASTNode *node = ast_new(NODE_RETURN_STMT, line, col);
+    node->as.return_stmt.value = value;
+    return node;
+}
+
 void ast_free(ASTNode *node) {
     if (!node) return;
 

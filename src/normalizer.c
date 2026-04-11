@@ -85,6 +85,43 @@ static int is_ident(Token *tokens, int pos, int count) {
     return 1;
 }
 
+/* Check if the last token in the output stream looks like the end of an expression.
+ * Used to determine if an ambiguous word like "add" should be an operator vs identifier. */
+static int last_output_is_expr_end(TokenList *tl) {
+    if (tl->count == 0) return 0;
+    Token *last = &tl->items[tl->count - 1];
+    switch (last->type) {
+        case TOK_NUMBER:
+        case TOK_STRING:
+        case TOK_RPAREN:
+        case TOK_RBRACKET:
+            return 1;
+        case TOK_WORD:
+            /* An identifier or literal value keyword is expression-like */
+            if (strcmp(last->value, "true") == 0 ||
+                strcmp(last->value, "false") == 0 ||
+                strcmp(last->value, "nothing") == 0)
+                return 1;
+            /* Any other word could be an identifier (expression end) */
+            /* But not keywords like "display", "if", "then", etc. */
+            {
+                static const char *non_expr[] = {
+                    "if", "then", "else", "end", "while", "do", "for",
+                    "function", "return", "display", "print", "show", "say",
+                    "taking", "with", "call", "from", "to", "in", "is",
+                    "and", "or", "not", "loop", "break", "continue", "skip",
+                    NULL
+                };
+                for (int k = 0; non_expr[k]; k++) {
+                    if (strcmp(last->value, non_expr[k]) == 0) return 0;
+                }
+            }
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 Token *normalizer_run(Token *tokens, int count, int *out_count) {
     TokenList out;
     tlist_init(&out);
@@ -341,10 +378,12 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             continue;
         }
 
-        /* "remainder of" → % (e.g., "the remainder of x divided by y"
-         * but also usable as infix: "x remainder of y") */
+        /* "remainder of" — handled by the parser as a named operation
+         * ("the remainder of X divided by Y"), so only rewrite when
+         * preceded by an expression (infix usage: "x remainder of y") */
         if (is_word(tokens, i, count, "remainder") &&
-            is_word(tokens, i+1, count, "of")) {
+            is_word(tokens, i+1, count, "of") &&
+            last_output_is_expr_end(&out)) {
             tlist_push(&out, syn_op(TOK_PERCENT, "%", line, col));
             i += 2;
             continue;
@@ -354,37 +393,53 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
          * Single-token arithmetic rewrites
          */
 
-        /* Addition: "plus" / "add" / "adding" → + */
-        if (is_word(tokens, i, count, "plus") ||
-            is_word(tokens, i, count, "add") ||
-            is_word(tokens, i, count, "adding")) {
+        /* Addition: "plus" → + (always), "add" / "adding" → + (only after expression) */
+        if (is_word(tokens, i, count, "plus")) {
+            tlist_push(&out, syn_op(TOK_PLUS, "+", line, col));
+            i++;
+            continue;
+        }
+        if ((is_word(tokens, i, count, "add") ||
+             is_word(tokens, i, count, "adding")) &&
+            last_output_is_expr_end(&out)) {
             tlist_push(&out, syn_op(TOK_PLUS, "+", line, col));
             i++;
             continue;
         }
 
-        /* Subtraction: "minus" / "subtract" / "subtracting" → - */
-        if (is_word(tokens, i, count, "minus") ||
-            is_word(tokens, i, count, "subtract") ||
-            is_word(tokens, i, count, "subtracting")) {
+        /* Subtraction: "minus" → - (always), "subtract" / "subtracting" → - (after expr) */
+        if (is_word(tokens, i, count, "minus")) {
+            tlist_push(&out, syn_op(TOK_MINUS, "-", line, col));
+            i++;
+            continue;
+        }
+        if ((is_word(tokens, i, count, "subtract") ||
+             is_word(tokens, i, count, "subtracting")) &&
+            last_output_is_expr_end(&out)) {
             tlist_push(&out, syn_op(TOK_MINUS, "-", line, col));
             i++;
             continue;
         }
 
-        /* Multiplication: "times" / "multiply" / "multiplying" → * */
-        if (is_word(tokens, i, count, "times") ||
-            is_word(tokens, i, count, "multiply") ||
-            is_word(tokens, i, count, "multiplying")) {
+        /* Multiplication: "times" → * (always), "multiply" / "multiplying" → * (after expr) */
+        if (is_word(tokens, i, count, "times")) {
+            tlist_push(&out, syn_op(TOK_STAR, "*", line, col));
+            i++;
+            continue;
+        }
+        if ((is_word(tokens, i, count, "multiply") ||
+             is_word(tokens, i, count, "multiplying")) &&
+            last_output_is_expr_end(&out)) {
             tlist_push(&out, syn_op(TOK_STAR, "*", line, col));
             i++;
             continue;
         }
 
-        /* Division: "divide" / "dividing" / "over" → / */
-        if (is_word(tokens, i, count, "divide") ||
-            is_word(tokens, i, count, "dividing") ||
-            is_word(tokens, i, count, "over")) {
+        /* Division: "divide" / "dividing" / "over" → / (after expr) */
+        if ((is_word(tokens, i, count, "divide") ||
+             is_word(tokens, i, count, "dividing") ||
+             is_word(tokens, i, count, "over")) &&
+            last_output_is_expr_end(&out)) {
             tlist_push(&out, syn_op(TOK_SLASH, "/", line, col));
             i++;
             continue;
@@ -410,6 +465,95 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
         if (is_word(tokens, i, count, "equals")) {
             tlist_push(&out, syn_op(TOK_EQ, "==", line, col));
             i++;
+            continue;
+        }
+
+        /*
+         * ===== FUNCTION DEFINITION SUGAR =====
+         * All map to: function NAME [taking PARAMS] ... end
+         */
+
+        /* "to NAME with PARAMS" → "function NAME taking PARAMS" */
+        if (is_word(tokens, i, count, "to") &&
+            is_ident(tokens, i+1, count) &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            tlist_push(&out, syn_word("function", line, col));
+            tlist_push(&out, clone_token(&tokens[i+1]));
+            i += 2;
+            /* "with" → "taking" */
+            if (is_word(tokens, i, count, "with")) {
+                tlist_push(&out, syn_word("taking", line, col));
+                i++;
+            }
+            continue;
+        }
+
+        /* "define function" / "create function" / "define method" / "create method" → "function" */
+        if ((is_word(tokens, i, count, "define") ||
+             is_word(tokens, i, count, "create")) &&
+            (is_word(tokens, i+1, count, "function") ||
+             is_word(tokens, i+1, count, "method"))) {
+            tlist_push(&out, syn_word("function", line, col));
+            i += 2;
+            continue;
+        }
+
+        /* bare "method" at line start → "function" */
+        if (is_word(tokens, i, count, "method") &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            tlist_push(&out, syn_word("function", line, col));
+            i++;
+            continue;
+        }
+
+        /* "define NAME taking/with" → "function NAME taking" (without "function" keyword) */
+        if (is_word(tokens, i, count, "define") &&
+            is_ident(tokens, i+1, count) &&
+            (is_word(tokens, i+2, count, "taking") || is_word(tokens, i+2, count, "with") ||
+             is_word(tokens, i+2, count, "as")) &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            tlist_push(&out, syn_word("function", line, col));
+            /* leave the name and rest for next iteration */
+            i++;
+            continue;
+        }
+
+        /* "that takes" → "taking" */
+        if (is_word(tokens, i, count, "that") &&
+            is_word(tokens, i+1, count, "takes")) {
+            tlist_push(&out, syn_word("taking", line, col));
+            i += 2;
+            continue;
+        }
+
+        /* "which takes" → "taking" */
+        if (is_word(tokens, i, count, "which") &&
+            is_word(tokens, i+1, count, "takes")) {
+            tlist_push(&out, syn_word("taking", line, col));
+            i += 2;
+            continue;
+        }
+
+        /* "called" → noise word before function name (strip it) */
+        if (is_word(tokens, i, count, "called") &&
+            is_ident(tokens, i+1, count)) {
+            i++;
+            continue;
+        }
+
+        /* "give back" / "send back" → "return" */
+        if ((is_word(tokens, i, count, "give") || is_word(tokens, i, count, "send")) &&
+            is_word(tokens, i+1, count, "back")) {
+            tlist_push(&out, syn_word("return", line, col));
+            i += 2;
+            continue;
+        }
+
+        /* "respond with" / "result is" as return sugar */
+        if (is_word(tokens, i, count, "respond") &&
+            is_word(tokens, i+1, count, "with")) {
+            tlist_push(&out, syn_word("return", line, col));
+            i += 2;
             continue;
         }
 
@@ -727,6 +871,82 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
     }
     free(tokens);
 
-    *out_count = out.count;
-    return out.items;
+    /*
+     * Post-processing pass: detect post-assignment patterns.
+     * Scan for lines ending with:
+     *   ... (and|then) (assign|store|save|put) (to|in) IDENT NEWLINE
+     * Rearrange to: IDENT is ... NEWLINE
+     */
+    TokenList final;
+    tlist_init(&final);
+
+    int li = 0; /* line start index in out */
+    for (int k = 0; k <= out.count; k++) {
+        int is_end = (k == out.count) ||
+                     (out.items[k].type == TOK_NEWLINE) ||
+                     (out.items[k].type == TOK_EOF);
+        if (!is_end) continue;
+
+        /* We have a line from li to k-1 (inclusive).
+         * Check if it ends with: (and|then) (assign|store|save|put) (to|in) IDENT */
+        int line_len = k - li;
+        if (line_len >= 4) {
+            int e = k - 1; /* last token index */
+            Token *t_ident = &out.items[e];
+            Token *t_prep  = (e >= li + 1) ? &out.items[e - 1] : NULL;
+            Token *t_verb  = (e >= li + 2) ? &out.items[e - 2] : NULL;
+            Token *t_conj  = (e >= li + 3) ? &out.items[e - 3] : NULL;
+
+            int matched = 0;
+            if (t_ident && t_prep && t_verb && t_conj &&
+                t_ident->type == TOK_WORD &&
+                t_prep->type == TOK_WORD &&
+                t_verb->type == TOK_WORD &&
+                t_conj->type == TOK_WORD &&
+                (strcmp(t_conj->value, "and") == 0 ||
+                 strcmp(t_conj->value, "then") == 0) &&
+                (strcmp(t_verb->value, "assign") == 0 ||
+                 strcmp(t_verb->value, "store") == 0 ||
+                 strcmp(t_verb->value, "save") == 0 ||
+                 strcmp(t_verb->value, "put") == 0) &&
+                (strcmp(t_prep->value, "to") == 0 ||
+                 strcmp(t_prep->value, "in") == 0 ||
+                 strcmp(t_prep->value, "as") == 0)) {
+                matched = 1;
+            }
+
+            if (matched) {
+                /* Rearrange: IDENT is [tokens from li to e-4] NEWLINE */
+                int expr_end = e - 3; /* exclusive: tokens li..expr_end-1 are the expression */
+                tlist_push(&final, clone_token(t_ident));
+                tlist_push(&final, syn_word("is", t_ident->line, t_ident->col));
+                for (int m = li; m < expr_end; m++) {
+                    /* Strip leading "the" since it's now mid-expression */
+                    if (m == li && out.items[m].type == TOK_WORD &&
+                        strcmp(out.items[m].value, "the") == 0) continue;
+                    tlist_push(&final, clone_token(&out.items[m]));
+                }
+                if (k < out.count) {
+                    tlist_push(&final, clone_token(&out.items[k])); /* NEWLINE/EOF */
+                }
+                li = k + 1;
+                continue;
+            }
+        }
+
+        /* No post-assignment match — emit line as-is */
+        for (int m = li; m <= k && m < out.count; m++) {
+            tlist_push(&final, clone_token(&out.items[m]));
+        }
+        li = k + 1;
+    }
+
+    /* Free intermediate output */
+    for (int j = 0; j < out.count; j++) {
+        token_free(&out.items[j]);
+    }
+    free(out.items);
+
+    *out_count = final.count;
+    return final.items;
 }

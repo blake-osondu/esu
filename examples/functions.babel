@@ -1,0 +1,48 @@
+-- Traditional function definition
+function greet taking name
+    display "Hello, " + name
+end
+greet("World")
+
+-- "to NAME with PARAMS" sugar
+to add with a and b
+    return a + b
+end
+display add(3, 4)
+
+-- "call X with" syntax
+call greet with "Babel"
+
+-- Multiple arguments with "call ... with ... and ..."
+function multiply taking x and y
+    return x * y
+end
+let result be call multiply with 6 and 7
+display result
+
+-- "give back" as return sugar
+function square taking n
+    give back n * n
+end
+display square(5)
+
+-- Function with no parameters
+function say_hello
+    display "hello from function"
+end
+call say_hello
+
+-- Recursive function
+function factorial taking n
+    when n is at most 1 then
+        return 1
+    end
+    return n * factorial(n - 1)
+end
+display factorial(5)
+
+-- "to ... with" + "send back"
+to double with x
+    send back x * 2
+end
+display double(21)

@@ -140,6 +140,16 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             break;
         }
 
+        case NODE_FUNCTION_CALL: {
+            emit(cg, "babel_func_%s(", node->as.func_call.name);
+            for (int i = 0; i < node->as.func_call.arg_count; i++) {
+                if (i > 0) emit(cg, ", ");
+                gen_expression(cg, node->as.func_call.args[i]);
+            }
+            emit(cg, ")");
+            break;
+        }
+
         default:
             emit(cg, "babel_nothing() /* unhandled expr */");
             break;
@@ -294,6 +304,28 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             emit(cg, "continue;\n");
             break;
 
+        case NODE_RETURN_STMT:
+            emit_indent(cg);
+            if (node->as.return_stmt.value) {
+                emit(cg, "return ");
+                gen_expression(cg, node->as.return_stmt.value);
+                emit(cg, ";\n");
+            } else {
+                emit(cg, "return babel_nothing();\n");
+            }
+            break;
+
+        case NODE_FUNCTION_CALL:
+            /* Function call as a statement (discard return value) */
+            emit_indent(cg);
+            gen_expression(cg, node);
+            emit(cg, ";\n");
+            break;
+
+        case NODE_FUNCTION_DEF:
+            /* Function defs are handled in codegen_generate, not here */
+            break;
+
         default:
             /* Expression statement */
             emit_indent(cg);
@@ -303,21 +335,89 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
     }
 }
 
+static void gen_function_def(CodeGen *cg, ASTNode *node) {
+    const char *name = node->as.func_def.name;
+    int param_count = node->as.func_def.param_count;
+
+    emit(cg, "BabelValue *babel_func_%s(", name);
+    for (int i = 0; i < param_count; i++) {
+        if (i > 0) emit(cg, ", ");
+        emit(cg, "BabelValue *var_%s", node->as.func_def.params[i]);
+    }
+    emit(cg, ") {\n");
+
+    /* Save and reset declared vars for function scope */
+    char **saved_vars = cg->declared_vars;
+    int saved_count = cg->declared_count;
+    int saved_cap = cg->declared_cap;
+    cg->declared_cap = 16;
+    cg->declared_vars = malloc(sizeof(char *) * cg->declared_cap);
+    cg->declared_count = 0;
+
+    /* Mark parameters as declared */
+    for (int i = 0; i < param_count; i++) {
+        mark_declared(cg, node->as.func_def.params[i]);
+    }
+
+    cg->indent = 1;
+    gen_block(cg, &node->as.func_def.body);
+
+    /* Implicit return nothing at end */
+    emit_indent(cg);
+    emit(cg, "return babel_nothing();\n");
+
+    cg->indent = 0;
+    emit(cg, "}\n\n");
+
+    /* Restore outer scope vars */
+    for (int i = 0; i < cg->declared_count; i++) {
+        free(cg->declared_vars[i]);
+    }
+    free(cg->declared_vars);
+    cg->declared_vars = saved_vars;
+    cg->declared_count = saved_count;
+    cg->declared_cap = saved_cap;
+}
+
 void codegen_generate(CodeGen *cg, ASTNode *program) {
+    NodeList *stmts = &program->as.program.stmts;
+
     /* Preamble */
     emit(cg, "#include \"babel_runtime.h\"\n\n");
+
+    /* Forward declarations for all functions */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
+            ASTNode *fn = stmts->items[i];
+            emit(cg, "BabelValue *babel_func_%s(", fn->as.func_def.name);
+            for (int j = 0; j < fn->as.func_def.param_count; j++) {
+                if (j > 0) emit(cg, ", ");
+                emit(cg, "BabelValue *var_%s", fn->as.func_def.params[j]);
+            }
+            emit(cg, ");\n");
+        }
+    }
+    emit(cg, "\n");
+
+    /* Emit function definitions */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
+            gen_function_def(cg, stmts->items[i]);
+        }
+    }
+
+    /* Main function with non-function statements */
     emit(cg, "int main(int argc, char **argv) {\n");
     cg->indent = 1;
     emit_indent(cg);
     emit(cg, "babel_runtime_init();\n\n");
 
-    /* Statements */
-    NodeList *stmts = &program->as.program.stmts;
     for (int i = 0; i < stmts->count; i++) {
-        gen_statement(cg, stmts->items[i]);
+        if (stmts->items[i]->type != NODE_FUNCTION_DEF) {
+            gen_statement(cg, stmts->items[i]);
+        }
     }
 
-    /* Epilogue */
     emit(cg, "\n");
     emit_indent(cg);
     emit(cg, "babel_runtime_cleanup();\n");

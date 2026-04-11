@@ -1,0 +1,47 @@
+-- Named math operations
+display the sum of 3 and 4
+display the product of 6 and 7
+display the difference of 10 and 3
+display the quotient of 20 and 4
+
+-- Assign result of named operation
+x is the sum of 10 and 20
+display x
+
+-- "let x be the sum of ..."
+let y be the product of 5 and 6
+display y
+
+-- "the result of calling ..."
+function double taking n
+    return n * 2
+end
+
+let z be the result of calling double with 21
+display z
+
+-- Also works without "calling"
+let w be the result of double(7)
+display w
+
+-- Post-assignment syntax: EXPR then assign to IDENT
+the sum of 100 and 50 then assign to total
+display total
+
+-- "... and store in ..."
+the product of 3 and 9 and store in val
+display val
+
+-- "... then save to ..."
+the difference of 50 and 8 then save to diff
+display diff
+
+-- Works with any expression
+5 + 10 * 2 then assign to calc
+display calc
+
+-- "method" as alias for "function"
+method greet taking name
+    display "Hi, " + name
+end
+call greet with "Babel"

@@ -126,6 +126,9 @@ ASTNode *ast_identifier(const char *name, int line, int col);
 ASTNode *ast_assignment(const char *name, ASTNode *value, int line, int col);
 ASTNode *ast_binary(ASTNode *left, const char *op, ASTNode *right, int line, int col);
 ASTNode *ast_unary(const char *op, ASTNode *operand, int line, int col);
+ASTNode *ast_function_def(const char *name, char **params, int param_count, int line, int col);
+ASTNode *ast_function_call(const char *name, ASTNode **args, int arg_count, int line, int col);
+ASTNode *ast_return(ASTNode *value, int line, int col);
 
 /* NodeList helpers */
 void node_list_init(NodeList *list);

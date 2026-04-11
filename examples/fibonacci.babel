@@ -1,0 +1,10 @@
+function fibonacci taking n
+    if n is at most 1 then
+        return n
+    end
+    return fibonacci(n - 1) + fibonacci(n - 2)
+end
+
+for i from 0 to 10 do
+    display fibonacci(i)
+end
