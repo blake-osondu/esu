@@ -165,6 +165,39 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             break;
         }
 
+        case NODE_LIST_LIT: {
+            /* Generate: create list, append each item */
+            emit(cg, "({ BabelValue *_l = babel_list_new(); ");
+            for (int i = 0; i < node->as.list_lit.count; i++) {
+                emit(cg, "babel_list_append(_l, ");
+                gen_expression(cg, node->as.list_lit.items[i]);
+                emit(cg, "); ");
+            }
+            emit(cg, "_l; })");
+            break;
+        }
+
+        case NODE_MAP_LIT: {
+            emit(cg, "({ BabelValue *_m = babel_map_new(); ");
+            for (int i = 0; i < node->as.map_lit.count; i++) {
+                emit(cg, "babel_map_set(_m, babel_string(");
+                emit_c_string(cg, node->as.map_lit.keys[i]);
+                emit(cg, "), ");
+                gen_expression(cg, node->as.map_lit.values[i]);
+                emit(cg, "); ");
+            }
+            emit(cg, "_m; })");
+            break;
+        }
+
+        case NODE_INDEX_EXPR:
+            emit(cg, "babel_index(");
+            gen_expression(cg, node->as.index_expr.object);
+            emit(cg, ", ");
+            gen_expression(cg, node->as.index_expr.index);
+            emit(cg, ")");
+            break;
+
         default:
             emit(cg, "babel_nothing() /* unhandled expr */");
             break;
@@ -298,11 +331,39 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             break;
         }
 
-        case NODE_FOR_IN_STMT:
-            /* Will be fully implemented in Phase 6 (lists) */
+        case NODE_FOR_IN_STMT: {
+            const char *var = node->as.for_in.var_name;
             emit_indent(cg);
-            emit(cg, "/* TODO: for-in loop */\n");
+            emit(cg, "{\n");
+            cg->indent++;
+            emit_indent(cg);
+            emit(cg, "BabelValue *_collection = ");
+            gen_expression(cg, node->as.for_in.collection);
+            emit(cg, ";\n");
+            emit_indent(cg);
+            emit(cg, "if (_collection->type == %d) {\n", 4); /* VAL_LIST = 4 */
+            cg->indent++;
+            emit_indent(cg);
+            emit(cg, "BabelList *_list = _collection->as.list;\n");
+            emit_indent(cg);
+            emit(cg, "for (int _idx = 0; _idx < _list->count; _idx++) {\n");
+            cg->indent++;
+            emit_indent(cg);
+            emit(cg, "BabelValue *");
+            emit_c_ident(cg, "var_", var);
+            emit(cg, " = _list->items[_idx];\n");
+            gen_block(cg, &node->as.for_in.body);
+            cg->indent--;
+            emit_indent(cg);
+            emit(cg, "}\n");
+            cg->indent--;
+            emit_indent(cg);
+            emit(cg, "}\n");
+            cg->indent--;
+            emit_indent(cg);
+            emit(cg, "}\n");
             break;
+        }
 
         case NODE_LOOP_STMT:
             emit_indent(cg);

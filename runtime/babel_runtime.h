@@ -6,6 +6,8 @@
 #include "babel_io.h"
 #include "babel_ops.h"
 #include "babel_string.h"
+#include "babel_list.h"
+#include "babel_map.h"
 
 void babel_runtime_init(void);
 void babel_runtime_cleanup(void);

@@ -149,35 +149,130 @@ static ASTNode *parse_primary(Parser *p) {
         return make_builtin_call("__length", args, 1, t->line, t->col);
     }
 
+    /* "number of items in X" → __length(X) */
+    if (check_word(p, "number") && p->pos + 3 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "of") == 0 &&
+        p->tokens[p->pos + 2].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 2].value, "items") == 0 ||
+         strcmp(p->tokens[p->pos + 2].value, "elements") == 0 ||
+         strcmp(p->tokens[p->pos + 2].value, "entries") == 0) &&
+        p->tokens[p->pos + 3].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 3].value, "in") == 0) {
+        Token *t = advance_parser(p);
+        advance_parser(p); advance_parser(p); advance_parser(p);
+        ASTNode *arg = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = arg;
+        return make_builtin_call("__length", args, 1, t->line, t->col);
+    }
+
+    /* "item at index N in X" / "element at index N in X" → __index(X, N) */
+    if ((check_word(p, "item") || check_word(p, "element")) &&
+        p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "at") == 0) {
+        Token *t = advance_parser(p);
+        advance_parser(p); /* consume "at" */
+        if (check_word(p, "index")) advance_parser(p); /* optional "index" */
+        if (check_word(p, "position")) advance_parser(p); /* optional "position" */
+        ASTNode *idx = parse_primary(p);
+        if (check_word(p, "in") || check_word(p, "of")) advance_parser(p);
+        ASTNode *collection = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = collection; args[1] = idx;
+        return make_builtin_call("__index", args, 2, t->line, t->col);
+    }
+
+    /* "item N in/of X" → __index(X, N-1) for 1-based indexing
+     * Actually let's keep 0-based but support "Nth item in X" below */
+
+    /* --- Ordinal indexing: "the 1st/2nd/3rd/4th/5th/Nth item in X" --- */
+    /* Ordinals are handled by checking if the current token is a number-like
+     * word or a number followed by "st"/"nd"/"rd"/"th" in the token.
+     * Since the lexer treats "5th" as a word, we parse the number from it. */
+    if (check_type(p, TOK_WORD) && p->pos + 2 < p->count) {
+        const char *w = current(p)->value;
+        int wlen = strlen(w);
+        /* Check if word ends in st/nd/rd/th and starts with digits */
+        if (wlen >= 3 && isdigit(w[0]) &&
+            (strcmp(w + wlen - 2, "st") == 0 ||
+             strcmp(w + wlen - 2, "nd") == 0 ||
+             strcmp(w + wlen - 2, "rd") == 0 ||
+             strcmp(w + wlen - 2, "th") == 0)) {
+            /* Extract the number */
+            int ordinal = atoi(w);
+            /* Check if followed by "item/element in/of" */
+            if (p->pos + 2 < p->count &&
+                p->tokens[p->pos + 1].type == TOK_WORD &&
+                (strcmp(p->tokens[p->pos + 1].value, "item") == 0 ||
+                 strcmp(p->tokens[p->pos + 1].value, "element") == 0) &&
+                p->tokens[p->pos + 2].type == TOK_WORD &&
+                (strcmp(p->tokens[p->pos + 2].value, "in") == 0 ||
+                 strcmp(p->tokens[p->pos + 2].value, "of") == 0)) {
+                Token *t = advance_parser(p); /* consume ordinal */
+                advance_parser(p); /* consume "item"/"element" */
+                advance_parser(p); /* consume "in"/"of" */
+                ASTNode *collection = parse_postfix(p);
+                /* 1-based to 0-based: "1st item" = index 0 */
+                ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                args[0] = collection;
+                args[1] = ast_number_lit(ordinal - 1, t->line, t->col);
+                return make_builtin_call("__index", args, 2, t->line, t->col);
+            }
+        }
+    }
+
     /* --- Character access --- */
-    /* "first letter/character of X" → __char_at(X, 0) */
+    /* "first letter/character/item/element of X" → index 0 */
     if (check_word(p, "first") && p->pos + 2 < p->count &&
         p->tokens[p->pos + 1].type == TOK_WORD &&
-        (strcmp(p->tokens[p->pos + 1].value, "letter") == 0 ||
-         strcmp(p->tokens[p->pos + 1].value, "character") == 0) &&
         p->tokens[p->pos + 2].type == TOK_WORD &&
         strcmp(p->tokens[p->pos + 2].value, "of") == 0) {
-        Token *t = advance_parser(p);
-        advance_parser(p); advance_parser(p); /* skip "letter/character of" */
-        ASTNode *str = parse_postfix(p);
-        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
-        args[0] = str;
-        args[1] = ast_number_lit(0, t->line, t->col);
-        return make_builtin_call("__char_at", args, 2, t->line, t->col);
+        const char *noun = p->tokens[p->pos + 1].value;
+        if (strcmp(noun, "letter") == 0 || strcmp(noun, "character") == 0) {
+            Token *t = advance_parser(p);
+            advance_parser(p); advance_parser(p);
+            ASTNode *str = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = str;
+            args[1] = ast_number_lit(0, t->line, t->col);
+            return make_builtin_call("__char_at", args, 2, t->line, t->col);
+        }
+        if (strcmp(noun, "item") == 0 || strcmp(noun, "element") == 0 ||
+            strcmp(noun, "entry") == 0 || strcmp(noun, "value") == 0) {
+            Token *t = advance_parser(p);
+            advance_parser(p); advance_parser(p);
+            ASTNode *collection = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = collection;
+            args[1] = ast_number_lit(0, t->line, t->col);
+            return make_builtin_call("__index", args, 2, t->line, t->col);
+        }
     }
-    /* "last letter/character of X" → __char_at(X, length-1) — use __last_char */
+    /* "last letter/character/item/element of X" */
     if (check_word(p, "last") && p->pos + 2 < p->count &&
         p->tokens[p->pos + 1].type == TOK_WORD &&
-        (strcmp(p->tokens[p->pos + 1].value, "letter") == 0 ||
-         strcmp(p->tokens[p->pos + 1].value, "character") == 0) &&
         p->tokens[p->pos + 2].type == TOK_WORD &&
         strcmp(p->tokens[p->pos + 2].value, "of") == 0) {
-        Token *t = advance_parser(p);
-        advance_parser(p); advance_parser(p); /* skip "letter/character of" */
-        ASTNode *str = parse_postfix(p);
-        ASTNode **args = malloc(sizeof(ASTNode *));
-        args[0] = str;
-        return make_builtin_call("__last_char", args, 1, t->line, t->col);
+        const char *noun = p->tokens[p->pos + 1].value;
+        if (strcmp(noun, "letter") == 0 || strcmp(noun, "character") == 0) {
+            Token *t = advance_parser(p);
+            advance_parser(p); advance_parser(p);
+            ASTNode *str = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = str;
+            return make_builtin_call("__last_char", args, 1, t->line, t->col);
+        }
+        if (strcmp(noun, "item") == 0 || strcmp(noun, "element") == 0 ||
+            strcmp(noun, "entry") == 0 || strcmp(noun, "value") == 0) {
+            Token *t = advance_parser(p);
+            advance_parser(p); advance_parser(p);
+            ASTNode *collection = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = collection;
+            return make_builtin_call("__list_last", args, 1, t->line, t->col);
+        }
     }
     /* "character/letter N of X" → __char_at(X, N) */
     if ((check_word(p, "character") || check_word(p, "letter")) &&
@@ -330,6 +425,61 @@ static ASTNode *parse_primary(Parser *p) {
         return parse_primary(p);
     }
 
+    /* List literal: [expr, expr, ...] */
+    if (tok->type == TOK_LBRACKET) {
+        Token *t = advance_parser(p);
+        int cap = 8;
+        ASTNode **items = malloc(sizeof(ASTNode *) * cap);
+        int count = 0;
+        if (!check_type(p, TOK_RBRACKET)) {
+            items[count++] = parse_expression(p);
+            while (check_type(p, TOK_COMMA)) {
+                advance_parser(p);
+                if (check_type(p, TOK_RBRACKET)) break; /* trailing comma */
+                if (count >= cap) { cap *= 2; items = realloc(items, sizeof(ASTNode *) * cap); }
+                items[count++] = parse_expression(p);
+            }
+        }
+        expect_type(p, TOK_RBRACKET, "expected ']' to close list");
+        return ast_list_lit(items, count, t->line, t->col);
+    }
+
+    /* Map literal: {"key": value, ...} */
+    if (tok->type == TOK_LBRACE) {
+        Token *t = advance_parser(p);
+        int cap = 8;
+        char **keys = malloc(sizeof(char *) * cap);
+        ASTNode **values = malloc(sizeof(ASTNode *) * cap);
+        int count = 0;
+        if (!check_type(p, TOK_RBRACE)) {
+            Token *key = expect_type(p, TOK_STRING, "expected string key in map");
+            expect_type(p, TOK_COLON, "expected ':' after map key");
+            ASTNode *val = parse_expression(p);
+            keys[count] = malloc(strlen(key->value) + 1);
+            strcpy(keys[count], key->value);
+            values[count] = val;
+            count++;
+            while (check_type(p, TOK_COMMA)) {
+                advance_parser(p);
+                if (check_type(p, TOK_RBRACE)) break;
+                if (count >= cap) {
+                    cap *= 2;
+                    keys = realloc(keys, sizeof(char *) * cap);
+                    values = realloc(values, sizeof(ASTNode *) * cap);
+                }
+                key = expect_type(p, TOK_STRING, "expected string key in map");
+                expect_type(p, TOK_COLON, "expected ':' after map key");
+                val = parse_expression(p);
+                keys[count] = malloc(strlen(key->value) + 1);
+                strcpy(keys[count], key->value);
+                values[count] = val;
+                count++;
+            }
+        }
+        expect_type(p, TOK_RBRACE, "expected '}' to close map");
+        return ast_map_lit(keys, values, count, t->line, t->col);
+    }
+
     if (tok->type == TOK_NUMBER) {
         advance_parser(p);
         return ast_number_lit(atof(tok->value), tok->line, tok->col);
@@ -450,11 +600,29 @@ static int looks_like_prefix_verb(Parser *p) {
         strcmp(w, "contains") == 0 || strcmp(w, "has") == 0) return 0;
     if (len > 4 && strcmp(w + len - 4, "ying") == 0) return 1;
     if (len > 3 && strcmp(w + len - 3, "ing") == 0) return 1;
-    if (len > 3 && strcmp(w + len - 3, "ies") == 0) return 1;
-    if (len > 2 && strcmp(w + len - 2, "es") == 0 && w[len - 3] != 'l') return 1;
-    if (w[len - 1] == 's' && w[len - 2] != 's' && w[len - 2] != 'i' &&
-        !isdigit(w[len - 2])) return 1;
+    /* -s/-es/-ies only when next token is a literal value (number, string, paren)
+     * to avoid ambiguity with plural nouns like "items", "results" */
     return 0;
+}
+
+/* Stricter check: looks like a third-person verb AND next is a literal */
+static int looks_like_third_person_call(Parser *p) {
+    if (!check_type(p, TOK_WORD)) return 0;
+    const char *w = current(p)->value;
+    int len = strlen(w);
+    if (len < 4) return 0;
+    /* Exclude builtin keywords */
+    if (strcmp(w, "equals") == 0 || strcmp(w, "exceeds") == 0 ||
+        strcmp(w, "contains") == 0 || strcmp(w, "has") == 0 ||
+        strcmp(w, "starts") == 0 || strcmp(w, "ends") == 0 ||
+        strcmp(w, "begins") == 0 || strcmp(w, "items") == 0 ||
+        strcmp(w, "takes") == 0) return 0;
+    /* Must end in -s and next must be a number, string, or ( */
+    if (w[len - 1] != 's') return 0;
+    int peek = p->pos + 1;
+    if (peek >= p->count) return 0;
+    TokenType next = p->tokens[peek].type;
+    return next == TOK_NUMBER || next == TOK_STRING || next == TOK_LPAREN;
 }
 
 /* Parse postfix conjugation: after a primary expression, check for past-tense
@@ -463,6 +631,14 @@ static int looks_like_prefix_verb(Parser *p) {
  * "x multiplied by y"   → multiply(x, y)  (two-arg via "by") */
 static ASTNode *parse_postfix(Parser *p) {
     ASTNode *expr = parse_primary(p);
+
+    /* Index expressions: x[0], x["key"] */
+    while (check_type(p, TOK_LBRACKET)) {
+        advance_parser(p); /* consume '[' */
+        ASTNode *index = parse_expression(p);
+        expect_type(p, TOK_RBRACKET, "expected ']' after index");
+        expr = ast_index_expr(expr, index, expr->line, expr->col);
+    }
 
     while (looks_like_past_tense(p)) {
         Token *verb = advance_parser(p);
@@ -670,8 +846,8 @@ static int next_is_expr_start(Parser *p) {
 }
 
 static ASTNode *parse_unary(Parser *p) {
-    /* Prefix verb: "doubling x" / "multiplying x and y" / "doubles x" */
-    if (looks_like_prefix_verb(p) && next_is_expr_start(p)) {
+    /* Prefix verb: "doubling x" / "multiplying x and y" / "doubles 3" */
+    if ((looks_like_prefix_verb(p) || looks_like_third_person_call(p)) && next_is_expr_start(p)) {
         Token *verb = advance_parser(p);
         int arg_cap = 4;
         ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
@@ -1057,9 +1233,79 @@ static ASTNode *parse_return(Parser *p) {
 static ASTNode *parse_statement(Parser *p) {
     Token *tok = current(p);
 
+    /* "display every ITEM in COLLECTION" → for-in loop printing each */
+    if (tok->type == TOK_WORD && is_print_keyword(tok->value) &&
+        p->pos + 3 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "every") == 0) {
+        Token *t = advance_parser(p); /* consume display */
+        advance_parser(p); /* consume "every" */
+        Token *var_tok = expect_type(p, TOK_WORD, "expected variable name after 'every'");
+        expect_word(p, "in", "expected 'in' after 'every ITEM'");
+        ASTNode *collection = parse_expression(p);
+
+        /* Build: for var in collection do, display var. end */
+        ASTNode *var_ref = ast_identifier(var_tok->value, var_tok->line, var_tok->col);
+        ASTNode *print_node = ast_print(var_ref, t->line, t->col);
+
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_FOR_IN_STMT;
+        node->line = t->line;
+        node->col = t->col;
+        node->as.for_in.var_name = str_dup_parser(var_tok->value);
+        node->as.for_in.collection = collection;
+        node_list_init(&node->as.for_in.body);
+        node_list_push(&node->as.for_in.body, print_node);
+        return node;
+    }
+
     /* Print statement */
     if (tok->type == TOK_WORD && is_print_keyword(tok->value)) {
         return parse_print_stmt(p);
+    }
+
+    /* "add EXPR to EXPR" — list append (as statement) */
+    if (check_word(p, "add") && !looks_like_prefix_verb(p)) {
+        /* Peek: is this "add X to Y" (list append) or just an identifier? */
+        /* We detect by looking for "to" after the expression */
+        int saved = p->pos;
+        advance_parser(p); /* consume "add" */
+        /* Try to parse expression, then check for "to" */
+        ASTNode *item = parse_comparison(p);
+        if (check_word(p, "to")) {
+            advance_parser(p); /* consume "to" */
+            ASTNode *list = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = list; args[1] = item;
+            return make_builtin_call("__list_append", args, 2, tok->line, tok->col);
+        }
+        /* Not "add X to Y" — restore and fall through */
+        /* Can't easily restore, so just treat as expression */
+        /* This is "add" used as a function name, which the expression parser handles */
+        p->pos = saved; /* restore */
+    }
+
+    /* "append EXPR to EXPR" */
+    if (check_word(p, "append")) {
+        Token *t = advance_parser(p);
+        ASTNode *item = parse_comparison(p);
+        expect_word(p, "to", "expected 'to' in 'append X to Y'");
+        ASTNode *list = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = list; args[1] = item;
+        return make_builtin_call("__list_append", args, 2, t->line, t->col);
+    }
+
+    /* "remove item N from LIST" / "remove EXPR from LIST" */
+    if (check_word(p, "remove")) {
+        Token *t = advance_parser(p);
+        if (check_word(p, "item")) advance_parser(p); /* optional "item" */
+        ASTNode *idx = parse_comparison(p);
+        expect_word(p, "from", "expected 'from' in 'remove X from Y'");
+        ASTNode *list = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = list; args[1] = idx;
+        return make_builtin_call("__list_remove", args, 2, t->line, t->col);
     }
 
     /* Function definition */

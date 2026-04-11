@@ -8,6 +8,12 @@ BabelValue *babel_length(BabelValue *val) {
     if (val->type == VAL_STRING) {
         return babel_number((double)strlen(val->as.string));
     }
+    if (val->type == VAL_LIST) {
+        return babel_number((double)val->as.list->count);
+    }
+    if (val->type == VAL_MAP) {
+        return babel_number((double)val->as.map->count);
+    }
     return babel_number(0);
 }
 
@@ -30,8 +36,23 @@ BabelValue *babel_substring(BabelValue *str, BabelValue *start, BabelValue *end)
 }
 
 BabelValue *babel_contains(BabelValue *str, BabelValue *search) {
-    if (str->type != VAL_STRING || search->type != VAL_STRING) return babel_bool(0);
-    return babel_bool(strstr(str->as.string, search->as.string) != NULL);
+    if (str->type == VAL_STRING && search->type == VAL_STRING) {
+        return babel_bool(strstr(str->as.string, search->as.string) != NULL);
+    }
+    if (str->type == VAL_LIST) {
+        /* Delegate to list_contains */
+        BabelList *list = str->as.list;
+        for (int i = 0; i < list->count; i++) {
+            BabelValue *a = list->items[i];
+            if (a->type == search->type) {
+                if (a->type == VAL_NUMBER && a->as.number == search->as.number) return babel_bool(1);
+                if (a->type == VAL_STRING && strcmp(a->as.string, search->as.string) == 0) return babel_bool(1);
+                if (a->type == VAL_BOOL && a->as.boolean == search->as.boolean) return babel_bool(1);
+            }
+        }
+        return babel_bool(0);
+    }
+    return babel_bool(0);
 }
 
 BabelValue *babel_starts_with(BabelValue *str, BabelValue *prefix) {

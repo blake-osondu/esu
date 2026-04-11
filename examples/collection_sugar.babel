@@ -1,0 +1,48 @@
+-- "a list of" syntax
+items is a list of 1, 2, 3, 4, 5
+display items
+
+-- "a list of" with Oxford comma
+names is a list of "Alice", "Bob", and "Charlie"
+display names
+
+-- "the length of"
+display the length of items
+
+-- "the number of items in"
+display the number of items in items
+
+-- "whether" / "whether or not"
+display whether items contains 3
+display whether or not items contains 99
+
+-- "does X contain Y"
+does items contain 3
+
+-- Item at index
+display item at index 0 in items
+display item at position 2 in items
+display element at index 4 in items
+
+-- Ordinal indexing (1-based)
+display the 1st item in items
+display the 2nd item in items
+display the 3rd item in items
+display the 5th element in items
+
+-- "display every item in"
+display every item in items
+
+-- "the first/last item of"
+display the first item of items
+display the last item of items
+
+-- "the number of characters in"
+display the number of characters in "hello"
+
+-- Combining features
+my-list is a list of 10, 20, 30
+display the 2nd item in my-list
+display the length of my-list
+add 40 to my-list
+display the last item of my-list

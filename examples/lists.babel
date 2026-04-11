@@ -1,0 +1,42 @@
+-- List creation and display
+items is [1, 2, 3, 4, 5]
+display items
+
+-- Index access
+display items[0]
+display items[2]
+
+-- Length
+display length of items
+
+-- Add to list
+add 6 to items
+display items
+
+-- Append to list
+append 7 to items
+display length of items
+
+-- Contains
+display items contains 3
+display items has 99 in it
+
+-- For-in iteration
+for item in items
+    display item.
+
+-- First and last
+display first item of items
+display last item of items
+
+-- Map creation
+person is {"name": "Alice", "age": 30}
+display person
+
+-- Map access
+display person["name"]
+display person["age"]
+
+-- Empty list
+empty is []
+display length of empty

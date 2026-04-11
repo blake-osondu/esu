@@ -843,18 +843,89 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             continue;
         }
 
-        /* Strip noise word "the" when followed by a word or expression start,
-         * but NOT when it could be meaningful (e.g., at start of a statement
-         * where it could be part of "the X of Y" patterns — we'll handle
-         * those later in Phase 6). For now, strip if between known tokens. */
-        if (is_word(tokens, i, count, "the") &&
-            i + 1 < count &&
-            (is_type(tokens, i+1, count, TOK_WORD) ||
-             is_type(tokens, i+1, count, TOK_NUMBER) ||
-             is_type(tokens, i+1, count, TOK_STRING))) {
-            /* Check context: only strip "the" when it's mid-expression,
-             * i.e., there's something before it on this line */
-            if (i > 0 && !is_type(tokens, i-1, count, TOK_NEWLINE)) {
+        /* "whether or not" → strip all three (noise before boolean) */
+        if (is_word(tokens, i, count, "whether") &&
+            is_word(tokens, i+1, count, "or") &&
+            is_word(tokens, i+2, count, "not")) {
+            i += 3;
+            continue;
+        }
+        /* "whether" → strip (noise before boolean) */
+        if (is_word(tokens, i, count, "whether")) {
+            i++;
+            continue;
+        }
+
+        /* "does X contain Y" → "X contains Y" (question form) */
+        if (is_word(tokens, i, count, "does") &&
+            is_ident(tokens, i+1, count) &&
+            is_word(tokens, i+2, count, "contain")) {
+            tlist_push(&out, clone_token(&tokens[i+1]));
+            tlist_push(&out, syn_word("contains", tokens[i].line, tokens[i].col));
+            i += 3;
+            continue;
+        }
+
+        /* "a list of" → marks start of inline list.
+         * We emit a '[' and then later match the end. */
+        if (is_word(tokens, i, count, "a") &&
+            is_word(tokens, i+1, count, "list") &&
+            is_word(tokens, i+2, count, "of")) {
+            tlist_push(&out, syn_op(TOK_LBRACKET, "[", line, col));
+            i += 3;
+            /* Scan forward to find end of list items (next newline, period, or 'then') */
+            /* Items are separated by commas/and — we just emit them and add ] before the line end */
+            while (i < count &&
+                   !is_type(tokens, i, count, TOK_NEWLINE) &&
+                   !is_type(tokens, i, count, TOK_EOF) &&
+                   !(tokens[i].type == TOK_DOT)) {
+                /* "and" between items → comma (skip if after existing comma) */
+                if (is_word(tokens, i, count, "and")) {
+                    /* Only emit comma if last output isn't already a comma */
+                    if (out.count > 0 && out.items[out.count - 1].type != TOK_COMMA) {
+                        tlist_push(&out, syn_op(TOK_COMMA, ",", line, col));
+                    }
+                    i++;
+                    continue;
+                }
+                tlist_push(&out, clone_token(&tokens[i]));
+                i++;
+            }
+            tlist_push(&out, syn_op(TOK_RBRACKET, "]", line, col));
+            /* Don't advance past the newline/period — let the outer loop handle it */
+            continue;
+        }
+
+        /* "every" before a noun → "for" (iteration keyword) */
+        if (is_word(tokens, i, count, "every") &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            /* "every item in X" or "every X in Y" */
+            tlist_push(&out, syn_word("for", line, col));
+            i++;
+            continue;
+        }
+
+        /* Strip noise word "the" — now also strip at line start when followed
+         * by known builtin prefix words */
+        if (is_word(tokens, i, count, "the") && i + 1 < count) {
+            int next_is_word = is_type(tokens, i+1, count, TOK_WORD);
+            if (next_is_word) {
+                const char *nv = tokens[i+1].value;
+                /* Always strip "the" before these (even at line start) */
+                if (strcmp(nv, "length") == 0 || strcmp(nv, "size") == 0 ||
+                    strcmp(nv, "number") == 0 || strcmp(nv, "first") == 0 ||
+                    strcmp(nv, "last") == 0 || strcmp(nv, "sum") == 0 ||
+                    strcmp(nv, "product") == 0 || strcmp(nv, "difference") == 0 ||
+                    strcmp(nv, "quotient") == 0 || strcmp(nv, "remainder") == 0 ||
+                    strcmp(nv, "result") == 0) {
+                    i++;
+                    continue;
+                }
+            }
+            /* Strip mid-expression "the" */
+            if (i > 0 && !is_type(tokens, i-1, count, TOK_NEWLINE) &&
+                (next_is_word || is_type(tokens, i+1, count, TOK_NUMBER) ||
+                 is_type(tokens, i+1, count, TOK_STRING))) {
                 i++;
                 continue;
             }

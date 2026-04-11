@@ -99,6 +99,23 @@ static Token lex_number(Lexer *lex) {
         advance(lex);
     }
 
+    /* Check for ordinal suffix: 1st, 2nd, 3rd, 4th, etc. */
+    char c1 = peek(lex);
+    char c2 = peek_next(lex);
+    if ((c1 == 's' && c2 == 't') ||
+        (c1 == 'n' && c2 == 'd') ||
+        (c1 == 'r' && c2 == 'd') ||
+        (c1 == 't' && c2 == 'h')) {
+        advance(lex); advance(lex); /* consume suffix */
+        int len = lex->pos - start;
+        char *buf = malloc(len + 1);
+        memcpy(buf, lex->source + start, len);
+        buf[len] = '\0';
+        Token tok = make_token(TOK_WORD, buf, line, col);
+        free(buf);
+        return tok;
+    }
+
     if (peek(lex) == '.' && isdigit(peek_next(lex))) {
         advance(lex); /* consume '.' */
         while (isdigit(peek(lex))) {

@@ -115,6 +115,28 @@ ASTNode *ast_return(ASTNode *value, int line, int col) {
     return node;
 }
 
+ASTNode *ast_list_lit(ASTNode **items, int count, int line, int col) {
+    ASTNode *node = ast_new(NODE_LIST_LIT, line, col);
+    node->as.list_lit.items = items;
+    node->as.list_lit.count = count;
+    return node;
+}
+
+ASTNode *ast_map_lit(char **keys, ASTNode **values, int count, int line, int col) {
+    ASTNode *node = ast_new(NODE_MAP_LIT, line, col);
+    node->as.map_lit.keys = keys;
+    node->as.map_lit.values = values;
+    node->as.map_lit.count = count;
+    return node;
+}
+
+ASTNode *ast_index_expr(ASTNode *object, ASTNode *index, int line, int col) {
+    ASTNode *node = ast_new(NODE_INDEX_EXPR, line, col);
+    node->as.index_expr.object = object;
+    node->as.index_expr.index = index;
+    return node;
+}
+
 void ast_free(ASTNode *node) {
     if (!node) return;
 
@@ -205,6 +227,23 @@ void ast_free(ASTNode *node) {
             break;
         case NODE_RETURN_STMT:
             ast_free(node->as.return_stmt.value);
+            break;
+        case NODE_LIST_LIT:
+            for (int i = 0; i < node->as.list_lit.count; i++)
+                ast_free(node->as.list_lit.items[i]);
+            free(node->as.list_lit.items);
+            break;
+        case NODE_MAP_LIT:
+            for (int i = 0; i < node->as.map_lit.count; i++) {
+                free(node->as.map_lit.keys[i]);
+                ast_free(node->as.map_lit.values[i]);
+            }
+            free(node->as.map_lit.keys);
+            free(node->as.map_lit.values);
+            break;
+        case NODE_INDEX_EXPR:
+            ast_free(node->as.index_expr.object);
+            ast_free(node->as.index_expr.index);
             break;
     }
 

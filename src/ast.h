@@ -22,6 +22,9 @@ typedef enum {
     NODE_FUNCTION_DEF,
     NODE_FUNCTION_CALL,
     NODE_RETURN_STMT,
+    NODE_LIST_LIT,
+    NODE_MAP_LIT,
+    NODE_INDEX_EXPR,
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -112,6 +115,15 @@ struct ASTNode {
 
         /* NODE_RETURN_STMT */
         struct { ASTNode *value; /* NULL for bare return */ } return_stmt;
+
+        /* NODE_LIST_LIT */
+        struct { ASTNode **items; int count; } list_lit;
+
+        /* NODE_MAP_LIT */
+        struct { char **keys; ASTNode **values; int count; } map_lit;
+
+        /* NODE_INDEX_EXPR: collection[index] */
+        struct { ASTNode *object; ASTNode *index; } index_expr;
     } as;
 };
 
@@ -129,6 +141,9 @@ ASTNode *ast_unary(const char *op, ASTNode *operand, int line, int col);
 ASTNode *ast_function_def(const char *name, char **params, int param_count, int line, int col);
 ASTNode *ast_function_call(const char *name, ASTNode **args, int arg_count, int line, int col);
 ASTNode *ast_return(ASTNode *value, int line, int col);
+ASTNode *ast_list_lit(ASTNode **items, int count, int line, int col);
+ASTNode *ast_map_lit(char **keys, ASTNode **values, int count, int line, int col);
+ASTNode *ast_index_expr(ASTNode *object, ASTNode *index, int line, int col);
 
 /* NodeList helpers */
 void node_list_init(NodeList *list);
