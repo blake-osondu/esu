@@ -1,0 +1,43 @@
+-- One-liner function with period
+function double taking x, return x * 2.
+
+display double(5)
+
+-- One-liner if with period
+x is 10
+when x is bigger than 5 then, display "big".
+
+-- One-liner if/else with commas and period
+when x is less than 5 then, display "small", otherwise display "not small".
+
+-- One-liner for loop
+for i from 1 to 3, display i.
+
+-- Multi-statement one-liner function
+function greet taking name, display "Hello, " + name, display "Welcome!".
+
+call greet with "World"
+
+-- Period works on multi-line too
+function add taking a and b
+    return a + b.
+
+display add(10, 20)
+
+-- While loop one-liner
+y is 3
+as long as y is bigger than 0, display y, y is y - 1.
+
+-- Traditional end still works
+function sub taking a and b
+    return a - b
+end
+
+display sub(10, 3)
+
+-- Mix: period on same line as last statement
+function triple taking x
+    result is x * 3
+    return result.
+
+display triple(4)

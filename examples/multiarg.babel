@@ -1,0 +1,42 @@
+-- 2 args: "and" separator
+function add taking a and b
+    return a + b
+end
+display call add with 3 and 4
+
+-- 3 args: all "and" separators
+function sum3 taking a and b and c
+    return a + b + c
+end
+display call sum3 with 10 and 20 and 30
+
+-- 3 args: comma separated
+display call sum3 with 10, 20, 30
+
+-- 3 args: Oxford comma (commas with final "and")
+display call sum3 with 10, 20, and 30
+
+-- 4 args
+function sum4 taking a and b and c and d
+    return a + b + c + d
+end
+display call sum4 with 1 and 2 and 3 and 4
+display call sum4 with 1, 2, 3, 4
+display call sum4 with 1, 2, 3, and 4
+
+-- 5 args with mixed separators
+function sum5 taking a, b, c, d, and e
+    return a + b + c + d + e
+end
+display call sum5 with 1, 2, 3, 4, and 5
+display sum5(1, 2, 3, 4, 5)
+
+-- Parentheses style still works for many args
+display sum4(10, 20, 30, 40)
+
+-- Colloquial with natural language
+function describe taking name and age and city
+    display name + " is " + age + " from " + city
+end
+call describe with "Alice" and 30 and "Paris"
+call describe with "Bob", 25, and "London"

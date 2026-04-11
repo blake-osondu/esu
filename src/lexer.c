@@ -64,7 +64,8 @@ static Token lex_word(Lexer *lex) {
     int line = lex->line;
     int col = lex->col;
 
-    while (isalpha(peek(lex)) || peek(lex) == '_' || isdigit(peek(lex))) {
+    while (isalpha(peek(lex)) || peek(lex) == '_' || isdigit(peek(lex)) ||
+           (peek(lex) == '-' && isalpha(peek_next(lex)))) {
         advance(lex);
     }
 

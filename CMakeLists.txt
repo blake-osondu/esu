@@ -25,6 +25,7 @@ add_executable(babel
     src/normalizer.c
     src/ast.c
     src/parser.c
+    src/resolver.c
     src/codegen.c
     src/error.c
     src/util.c

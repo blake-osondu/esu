@@ -1,0 +1,39 @@
+-- Define functions
+function double taking x, return x * 2.
+function triple taking x, return x * 3.
+function multiply taking a and b, return a * b.
+function add taking a and b, return a + b.
+
+-- Past tense postfix (single arg)
+display 5 doubled
+display 4 tripled
+
+-- Past tense + "by" (two args)
+display 3 multiplied by 5
+display 10 multiplied by 2
+
+-- Gerund prefix (single arg)
+display doubling 10
+display tripling 4
+
+-- Gerund prefix (multi arg with "and")
+display multiplying 3 and 5
+display adding 10 and 20
+
+-- Third person prefix
+display doubles 3
+display triples 4
+
+-- In assignments
+x is 7 doubled
+display x
+
+y is multiplying 3 and 10
+display y
+
+-- Chained: "5 doubled tripled" → triple(double(5))
+display 5 doubled tripled
+
+-- Hyphenated function and variable names still work
+my-value is 42
+display my-value

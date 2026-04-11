@@ -56,6 +56,14 @@ static void emit_indent(CodeGen *cg) {
     }
 }
 
+/* Emit a Babel identifier as a valid C identifier (hyphens → underscores) */
+static void emit_c_ident(CodeGen *cg, const char *prefix, const char *name) {
+    emit(cg, "%s", prefix);
+    for (const char *p = name; *p; p++) {
+        emit(cg, "%c", *p == '-' ? '_' : *p);
+    }
+}
+
 /* Escape a string for C string literal */
 static void emit_c_string(CodeGen *cg, const char *s) {
     emit(cg, "\"");
@@ -96,7 +104,7 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             break;
 
         case NODE_IDENTIFIER:
-            emit(cg, "var_%s", node->as.identifier.name);
+            emit_c_ident(cg, "var_", node->as.identifier.name);
             break;
 
         case NODE_BINARY_EXPR: {
@@ -141,7 +149,8 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         }
 
         case NODE_FUNCTION_CALL: {
-            emit(cg, "babel_func_%s(", node->as.func_call.name);
+            emit_c_ident(cg, "babel_func_", node->as.func_call.name);
+            emit(cg, "(");
             for (int i = 0; i < node->as.func_call.arg_count; i++) {
                 if (i > 0) emit(cg, ", ");
                 gen_expression(cg, node->as.func_call.args[i]);
@@ -174,10 +183,13 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
         case NODE_ASSIGNMENT:
             emit_indent(cg);
             if (!is_declared(cg, node->as.assignment.name)) {
-                emit(cg, "BabelValue *var_%s = ", node->as.assignment.name);
+                emit(cg, "BabelValue *");
+                emit_c_ident(cg, "var_", node->as.assignment.name);
+                emit(cg, " = ");
                 mark_declared(cg, node->as.assignment.name);
             } else {
-                emit(cg, "var_%s = ", node->as.assignment.name);
+                emit_c_ident(cg, "var_", node->as.assignment.name);
+                emit(cg, " = ");
             }
             gen_expression(cg, node->as.assignment.value);
             emit(cg, ";\n");
@@ -267,7 +279,9 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             emit(cg, "for (double _i = _start; _i <= _end; _i++) {\n");
             cg->indent++;
             emit_indent(cg);
-            emit(cg, "BabelValue *var_%s = babel_number(_i);\n", var);
+            emit(cg, "BabelValue *");
+            emit_c_ident(cg, "var_", var);
+            emit(cg, " = babel_number(_i);\n");
             gen_block(cg, &node->as.for_range.body);
             cg->indent--;
             emit_indent(cg);
@@ -339,10 +353,13 @@ static void gen_function_def(CodeGen *cg, ASTNode *node) {
     const char *name = node->as.func_def.name;
     int param_count = node->as.func_def.param_count;
 
-    emit(cg, "BabelValue *babel_func_%s(", name);
+    emit(cg, "BabelValue *");
+    emit_c_ident(cg, "babel_func_", name);
+    emit(cg, "(");
     for (int i = 0; i < param_count; i++) {
         if (i > 0) emit(cg, ", ");
-        emit(cg, "BabelValue *var_%s", node->as.func_def.params[i]);
+        emit(cg, "BabelValue *");
+        emit_c_ident(cg, "var_", node->as.func_def.params[i]);
     }
     emit(cg, ") {\n");
 
@@ -389,10 +406,13 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
     for (int i = 0; i < stmts->count; i++) {
         if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
             ASTNode *fn = stmts->items[i];
-            emit(cg, "BabelValue *babel_func_%s(", fn->as.func_def.name);
+            emit(cg, "BabelValue *");
+            emit_c_ident(cg, "babel_func_", fn->as.func_def.name);
+            emit(cg, "(");
             for (int j = 0; j < fn->as.func_def.param_count; j++) {
                 if (j > 0) emit(cg, ", ");
-                emit(cg, "BabelValue *var_%s", fn->as.func_def.params[j]);
+                emit(cg, "BabelValue *");
+                emit_c_ident(cg, "var_", fn->as.func_def.params[j]);
             }
             emit(cg, ");\n");
         }

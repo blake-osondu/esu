@@ -4,6 +4,7 @@
 #include "lexer.h"
 #include "normalizer.h"
 #include "parser.h"
+#include "resolver.h"
 #include "codegen.h"
 #include "util.h"
 
@@ -55,6 +56,9 @@ static int compile_babel(const char *source_path, const char *output_path, int e
     Parser parser;
     parser_init(&parser, tokens, token_count);
     ASTNode *program = parser_parse(&parser);
+
+    /* Resolve verb conjugations to function calls */
+    resolver_run(program);
 
     /* Generate C */
     CodeGen cg;

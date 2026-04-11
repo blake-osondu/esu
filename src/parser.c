@@ -1,7 +1,9 @@
 #include "parser.h"
 #include "error.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 void parser_init(Parser *p, Token *tokens, int count) {
     p->tokens = tokens;
@@ -41,18 +43,24 @@ static void expect_word(Parser *p, const char *word, const char *msg) {
     advance_parser(p);
 }
 
-static void skip_newlines(Parser *p) {
-    while (check_type(p, TOK_NEWLINE)) {
+/* Skip statement separators: newlines and commas between statements */
+static void skip_separators(Parser *p) {
+    while (check_type(p, TOK_NEWLINE) || check_type(p, TOK_COMMA)) {
         advance_parser(p);
     }
 }
 
-/* Consume 'do' or a newline — makes 'do' optional */
+/* Check if current token is a statement separator (newline or comma) */
+static int is_separator(Parser *p) {
+    return check_type(p, TOK_NEWLINE) || check_type(p, TOK_COMMA);
+}
+
+/* Consume 'do' or a separator — makes 'do' optional */
 static void expect_block_start(Parser *p) {
     if (check_word(p, "do")) {
         advance_parser(p);
     }
-    skip_newlines(p);
+    skip_separators(p);
 }
 
 static int is_print_keyword(const char *word) {
@@ -65,9 +73,23 @@ static int is_print_keyword(const char *word) {
 static int is_block_end(Parser *p) {
     if (check_type(p, TOK_EOF)) return 1;
     if (check_word(p, "end")) return 1;
+    if (check_type(p, TOK_DOT)) return 1;  /* period terminates blocks */
     if (check_word(p, "else")) return 1;
     if (check_word(p, "until")) return 1;
     return 0;
+}
+
+/* Consume a block terminator: "end" or "." */
+static void expect_block_end(Parser *p, const char *context) {
+    if (check_word(p, "end")) {
+        advance_parser(p);
+    } else if (check_type(p, TOK_DOT)) {
+        advance_parser(p);
+    } else {
+        char msg[128];
+        snprintf(msg, sizeof(msg), "expected 'end' or '.' to close %s", context);
+        babel_error_at_token(current(p), "%s", msg);
+    }
 }
 
 /* Forward declarations */
@@ -149,7 +171,9 @@ static ASTNode *parse_primary(Parser *p) {
                 advance_parser(p);
                 args[arg_count++] = parse_comparison(p);
                 while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                    int was_comma = check_type(p, TOK_COMMA);
                     advance_parser(p);
+                    if (was_comma && check_word(p, "and")) advance_parser(p);
                     if (arg_count >= arg_cap) {
                         arg_cap *= 2;
                         args = realloc(args, sizeof(ASTNode *) * arg_cap);
@@ -174,7 +198,7 @@ static ASTNode *parse_primary(Parser *p) {
     }
 
     /* "call NAME with ARGS" in expression context.
-     * Arguments are separated by "and" or ",".
+     * Arguments are separated by "and" or "," or ", and" (Oxford comma).
      * We parse each argument with parse_comparison (not full parse_expression)
      * so that "and" acts as separator, not boolean AND. */
     if (tok->type == TOK_WORD && strcmp(tok->value, "call") == 0) {
@@ -187,7 +211,10 @@ static ASTNode *parse_primary(Parser *p) {
             advance_parser(p);
             args[arg_count++] = parse_comparison(p);
             while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
-                advance_parser(p);
+                int was_comma = check_type(p, TOK_COMMA);
+                advance_parser(p); /* consume "and" or "," */
+                /* Skip "and" after "," for Oxford comma: "1, 2, and 3" */
+                if (was_comma && check_word(p, "and")) advance_parser(p);
                 if (arg_count >= arg_cap) {
                     arg_cap *= 2;
                     args = realloc(args, sizeof(ASTNode *) * arg_cap);
@@ -247,7 +274,108 @@ static ASTNode *parse_primary(Parser *p) {
     return NULL;
 }
 
+/* Check if current token looks like a conjugated verb (past tense or third person).
+ * Used for postfix function call: "x doubled" → double(x) */
+static int looks_like_past_tense(Parser *p) {
+    if (!check_type(p, TOK_WORD)) return 0;
+    const char *w = current(p)->value;
+    int len = strlen(w);
+    if (len < 4) return 0;
+    /* Don't match keywords */
+    if (strcmp(w, "continued") == 0 || strcmp(w, "returned") == 0 ||
+        strcmp(w, "called") == 0 || strcmp(w, "displayed") == 0) return 0;
+    if (len > 3 && strcmp(w + len - 3, "ied") == 0) return 1;
+    if (len > 2 && strcmp(w + len - 2, "ed") == 0) return 1;
+    return 0;
+}
+
+/* Check if current token looks like a gerund (-ing) or third-person (-s/-es) form.
+ * Used for prefix function call: "doubling x" → double(x), "doubles x" → double(x) */
+static int looks_like_prefix_verb(Parser *p) {
+    if (!check_type(p, TOK_WORD)) return 0;
+    const char *w = current(p)->value;
+    int len = strlen(w);
+    if (len < 4) return 0;
+    /* Don't match keywords */
+    if (strcmp(w, "taking") == 0 || strcmp(w, "calling") == 0 ||
+        strcmp(w, "equals") == 0 || strcmp(w, "exceeds") == 0 ||
+        strcmp(w, "nothing") == 0 || strcmp(w, "this") == 0) return 0;
+    if (len > 4 && strcmp(w + len - 4, "ying") == 0) return 1;
+    if (len > 3 && strcmp(w + len - 3, "ing") == 0) return 1;
+    if (len > 3 && strcmp(w + len - 3, "ies") == 0) return 1;
+    if (len > 2 && strcmp(w + len - 2, "es") == 0 && w[len - 3] != 'l') return 1;
+    if (w[len - 1] == 's' && w[len - 2] != 's' && w[len - 2] != 'i' &&
+        !isdigit(w[len - 2])) return 1;
+    return 0;
+}
+
+/* Parse postfix conjugation: after a primary expression, check for past-tense
+ * verb and wrap as function call.
+ * "x doubled"           → double(x)       (single-arg, no second operand)
+ * "x multiplied by y"   → multiply(x, y)  (two-arg via "by") */
+static ASTNode *parse_postfix(Parser *p) {
+    ASTNode *expr = parse_primary(p);
+
+    while (looks_like_past_tense(p)) {
+        Token *verb = advance_parser(p);
+
+        if (check_word(p, "by")) {
+            /* "x multiplied by y" → multiply(x, y) */
+            advance_parser(p); /* consume "by" */
+            ASTNode *right = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = expr;
+            args[1] = right;
+            expr = ast_function_call(verb->value, args, 2, verb->line, verb->col);
+        } else {
+            /* "x doubled" → double(x) — single arg only */
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = ast_function_call(verb->value, args, 1, verb->line, verb->col);
+        }
+    }
+
+    return expr;
+}
+
+/* Check if the next token (at pos+1) could start an expression */
+static int next_is_expr_start(Parser *p) {
+    int peek = p->pos + 1;
+    if (peek >= p->count) return 0;
+    TokenType t = p->tokens[peek].type;
+    return t == TOK_NUMBER || t == TOK_STRING || t == TOK_LPAREN ||
+           (t == TOK_WORD && strcmp(p->tokens[peek].value, "true") != 0 &&
+            strcmp(p->tokens[peek].value, "false") != 0 &&
+            strcmp(p->tokens[peek].value, "then") != 0 &&
+            strcmp(p->tokens[peek].value, "do") != 0 &&
+            strcmp(p->tokens[peek].value, "end") != 0);
+}
+
 static ASTNode *parse_unary(Parser *p) {
+    /* Prefix verb: "doubling x" / "multiplying x and y" / "doubles x" */
+    if (looks_like_prefix_verb(p) && next_is_expr_start(p)) {
+        Token *verb = advance_parser(p);
+        int arg_cap = 4;
+        ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
+        int arg_count = 0;
+
+        /* Parse first arg */
+        args[arg_count++] = parse_comparison(p);
+
+        /* Additional args separated by "and" or "," */
+        while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+            int was_comma = check_type(p, TOK_COMMA);
+            advance_parser(p);
+            if (was_comma && check_word(p, "and")) advance_parser(p);
+            if (arg_count >= arg_cap) {
+                arg_cap *= 2;
+                args = realloc(args, sizeof(ASTNode *) * arg_cap);
+            }
+            args[arg_count++] = parse_comparison(p);
+        }
+
+        return ast_function_call(verb->value, args, arg_count, verb->line, verb->col);
+    }
     if (check_word(p, "not")) {
         Token *op = advance_parser(p);
         ASTNode *operand = parse_unary(p);
@@ -258,7 +386,7 @@ static ASTNode *parse_unary(Parser *p) {
         ASTNode *operand = parse_unary(p);
         return ast_unary("-", operand, op->line, op->col);
     }
-    return parse_primary(p);
+    return parse_postfix(p);
 }
 
 static ASTNode *parse_multiplication(Parser *p) {
@@ -321,15 +449,15 @@ static ASTNode *parse_expression(Parser *p) {
 
 static void parse_block(Parser *p, NodeList *list) {
     node_list_init(list);
-    skip_newlines(p);
+    skip_separators(p);
     while (!is_block_end(p)) {
         ASTNode *stmt = parse_statement(p);
         node_list_push(list, stmt);
         if (!check_type(p, TOK_EOF) && !is_block_end(p)) {
-            if (!check_type(p, TOK_NEWLINE)) {
-                babel_error_at_token(current(p), "expected end of line after statement");
+            if (!is_separator(p)) {
+                babel_error_at_token(current(p), "expected end of line or ',' after statement");
             }
-            skip_newlines(p);
+            skip_separators(p);
         }
     }
 }
@@ -353,7 +481,7 @@ static ASTNode *parse_if_stmt(Parser *p) {
     Token *tok = advance_parser(p); /* consume 'if' */
     ASTNode *condition = parse_expression(p);
     expect_word(p, "then", "expected 'then' after condition");
-    skip_newlines(p);
+    skip_separators(p);
 
     ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = NODE_IF_STMT;
@@ -367,7 +495,7 @@ static ASTNode *parse_if_stmt(Parser *p) {
 
     if (check_word(p, "else")) {
         advance_parser(p);
-        skip_newlines(p);
+        skip_separators(p);
 
         if (check_word(p, "if")) {
             node->as.if_stmt.else_if = parse_if_stmt(p);
@@ -377,7 +505,7 @@ static ASTNode *parse_if_stmt(Parser *p) {
         }
     }
 
-    expect_word(p, "end", "expected 'end' to close if statement");
+    expect_block_end(p, "if statement");
     return node;
 }
 
@@ -393,7 +521,7 @@ static ASTNode *parse_while_stmt(Parser *p) {
     node->as.while_stmt.condition = condition;
     parse_block(p, &node->as.while_stmt.body);
 
-    expect_word(p, "end", "expected 'end' to close while loop");
+    expect_block_end(p, "while loop");
     return node;
 }
 
@@ -413,7 +541,7 @@ static ASTNode *parse_until_stmt(Parser *p) {
     node->as.while_stmt.condition = negated;
     parse_block(p, &node->as.while_stmt.body);
 
-    expect_word(p, "end", "expected 'end' to close until loop");
+    expect_block_end(p, "until loop");
     return node;
 }
 
@@ -457,7 +585,7 @@ static ASTNode *parse_for_stmt(Parser *p) {
         node->as.for_range.end = end_expr;
         parse_block(p, &node->as.for_range.body);
 
-        expect_word(p, "end", "expected 'end' to close for loop");
+        expect_block_end(p, "for loop");
         return node;
     } else if (check_word(p, "in")) {
         /* for-in: for ITEM in COLLECTION [do] ... end */
@@ -473,7 +601,7 @@ static ASTNode *parse_for_stmt(Parser *p) {
         node->as.for_in.collection = collection;
         parse_block(p, &node->as.for_in.body);
 
-        expect_word(p, "end", "expected 'end' to close for loop");
+        expect_block_end(p, "for loop");
         return node;
     } else {
         babel_error_at_token(current(p), "expected 'from' or 'in' after for variable");
@@ -483,7 +611,7 @@ static ASTNode *parse_for_stmt(Parser *p) {
 
 static ASTNode *parse_loop_stmt(Parser *p) {
     Token *tok = advance_parser(p); /* consume 'loop' */
-    skip_newlines(p);
+    skip_separators(p);
 
     ASTNode *node = calloc(1, sizeof(ASTNode));
     node->type = NODE_LOOP_STMT;
@@ -522,11 +650,37 @@ static ASTNode *parse_loop_stmt(Parser *p) {
         return node;
     }
 
-    expect_word(p, "end", "expected 'end' or 'until' to close loop");
+    expect_block_end(p, "loop");
     return node;
 }
 
 /* Parse a parameter list: "a and b and c" or "a, b, c" */
+/* Check if the next token after separators looks like a parameter name
+ * (not a statement keyword). Used to stop param list parsing before
+ * commas that are statement separators. */
+static int next_looks_like_param(Parser *p) {
+    int peek = p->pos + 1;
+    /* After comma, might have "and" (Oxford comma) */
+    if (peek < p->count && p->tokens[peek].type == TOK_WORD &&
+        strcmp(p->tokens[peek].value, "and") == 0) {
+        peek++;
+    }
+    if (peek >= p->count) return 0;
+    if (p->tokens[peek].type != TOK_WORD) return 0;
+    const char *v = p->tokens[peek].value;
+    /* If it's a statement keyword, it's not a param */
+    static const char *stmt_kw[] = {
+        "display", "print", "show", "say", "if", "when", "whenever",
+        "suppose", "assuming", "given", "while", "for", "loop", "return",
+        "break", "continue", "skip", "call", "end", "else", "otherwise",
+        NULL
+    };
+    for (int i = 0; stmt_kw[i]; i++) {
+        if (strcmp(v, stmt_kw[i]) == 0) return 0;
+    }
+    return 1;
+}
+
 static void parse_param_list(Parser *p, char ***out_params, int *out_count) {
     int cap = 8;
     char **params = malloc(sizeof(char *) * cap);
@@ -535,8 +689,11 @@ static void parse_param_list(Parser *p, char ***out_params, int *out_count) {
     Token *first = expect_type(p, TOK_WORD, "expected parameter name");
     params[count++] = str_dup_parser(first->value);
 
-    while (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+    while ((check_word(p, "and") || check_type(p, TOK_COMMA)) &&
+           next_looks_like_param(p)) {
+        int was_comma = check_type(p, TOK_COMMA);
         advance_parser(p); /* consume 'and' or ',' */
+        if (was_comma && check_word(p, "and")) advance_parser(p); /* Oxford comma */
         if (count >= cap) { cap *= 2; params = realloc(params, sizeof(char *) * cap); }
         Token *param = expect_type(p, TOK_WORD, "expected parameter name");
         params[count++] = str_dup_parser(param->value);
@@ -559,12 +716,12 @@ static ASTNode *parse_function_def(Parser *p) {
         parse_param_list(p, &params, &param_count);
     }
 
-    skip_newlines(p);
+    skip_separators(p);
 
     ASTNode *node = ast_function_def(name->value, params, param_count, tok->line, tok->col);
     parse_block(p, &node->as.func_def.body);
 
-    expect_word(p, "end", "expected 'end' to close function definition");
+    expect_block_end(p, "function definition");
     return node;
 }
 
@@ -659,15 +816,18 @@ static ASTNode *parse_statement(Parser *p) {
 ASTNode *parser_parse(Parser *p) {
     ASTNode *program = ast_program();
 
-    skip_newlines(p);
+    skip_separators(p);
     while (!check_type(p, TOK_EOF)) {
         ASTNode *stmt = parse_statement(p);
         node_list_push(&program->as.program.stmts, stmt);
 
-        if (!check_type(p, TOK_EOF) && !check_type(p, TOK_NEWLINE)) {
-            babel_error_at_token(current(p), "expected end of line after statement");
+        /* After a statement, expect separator, period (top-level), or EOF */
+        if (!check_type(p, TOK_EOF) && !is_separator(p) && !check_type(p, TOK_DOT)) {
+            babel_error_at_token(current(p), "expected end of line or ',' after statement");
         }
-        skip_newlines(p);
+        /* Consume period at top level (not inside a block) */
+        if (check_type(p, TOK_DOT)) advance_parser(p);
+        skip_separators(p);
     }
 
     return program;
