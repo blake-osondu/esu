@@ -1,0 +1,26 @@
+-- Addition variants
+display 3 plus 2
+display 3 add 2
+display 3 adding 2
+display 3 added to 2
+
+-- Subtraction variants
+display 10 minus 3
+display 10 subtract 3
+display 10 subtracting 3
+
+-- Multiplication variants
+display 4 times 5
+display 4 multiply 5
+display 4 multiplying 5
+display 4 multiplied by 5
+
+-- Division variants
+display 20 divided by 4
+display 20 divide 4
+display 20 dividing 4
+
+-- Modulo variants
+display 17 modulo 5
+display 17 mod 5
+display 17 remainder 5

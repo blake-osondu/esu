@@ -1,0 +1,20 @@
+-- Operator precedence: * before +
+display 2 + 3 * 4
+
+-- Parentheses override
+display (2 + 3) * 4
+
+-- String concatenation with +
+name is "World"
+display "Hello, " + name
+
+-- Negative numbers
+display -5
+x is -10
+display x
+
+-- Chained operations
+display 1 + 2 + 3 + 4
+
+-- Using word operators with precedence
+display 2 plus 3 times 4

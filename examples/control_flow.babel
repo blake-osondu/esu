@@ -1,0 +1,55 @@
+-- If/else
+x is 10
+if x is greater than 5 then
+    display "x is big"
+end
+
+-- If/else with else
+y is 3
+if y is greater than 5 then
+    display "y is big"
+else
+    display "y is small"
+end
+
+-- If/else-if/else chain
+score is 85
+if score is at least 90 then
+    display "A"
+else if score is at least 80 then
+    display "B"
+else if score is at least 70 then
+    display "C"
+else
+    display "F"
+end
+
+-- While loop
+count is 1
+while count is at most 5 do
+    display count
+    count is count + 1
+end
+
+-- For range loop
+for i from 1 to 5 do
+    display i
+end
+
+-- Loop with break
+n is 0
+loop
+    n is n + 1
+    if n exceeds 3 then
+        break
+    end
+    display n
+end
+
+-- Continue / skip
+for i from 1 to 6 do
+    if i == 3 then
+        skip
+    end
+    display i
+end

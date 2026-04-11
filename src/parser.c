@@ -1,0 +1,483 @@
+#include "parser.h"
+#include "error.h"
+#include <stdlib.h>
+#include <string.h>
+
+void parser_init(Parser *p, Token *tokens, int count) {
+    p->tokens = tokens;
+    p->count = count;
+    p->pos = 0;
+}
+
+static Token *current(Parser *p) {
+    return &p->tokens[p->pos];
+}
+
+static Token *advance_parser(Parser *p) {
+    Token *tok = &p->tokens[p->pos];
+    if (p->pos < p->count - 1) p->pos++;
+    return tok;
+}
+
+static int check_type(Parser *p, TokenType type) {
+    return current(p)->type == type;
+}
+
+static int check_word(Parser *p, const char *word) {
+    return current(p)->type == TOK_WORD && strcmp(current(p)->value, word) == 0;
+}
+
+static Token *expect_type(Parser *p, TokenType type, const char *msg) {
+    if (!check_type(p, type)) {
+        babel_error_at_token(current(p), "%s", msg);
+    }
+    return advance_parser(p);
+}
+
+static void expect_word(Parser *p, const char *word, const char *msg) {
+    if (!check_word(p, word)) {
+        babel_error_at_token(current(p), "%s", msg);
+    }
+    advance_parser(p);
+}
+
+static void skip_newlines(Parser *p) {
+    while (check_type(p, TOK_NEWLINE)) {
+        advance_parser(p);
+    }
+}
+
+/* Consume 'do' or a newline — makes 'do' optional */
+static void expect_block_start(Parser *p) {
+    if (check_word(p, "do")) {
+        advance_parser(p);
+    }
+    skip_newlines(p);
+}
+
+static int is_print_keyword(const char *word) {
+    return strcmp(word, "display") == 0 ||
+           strcmp(word, "print") == 0 ||
+           strcmp(word, "show") == 0 ||
+           strcmp(word, "say") == 0;
+}
+
+static int is_block_end(Parser *p) {
+    if (check_type(p, TOK_EOF)) return 1;
+    if (check_word(p, "end")) return 1;
+    if (check_word(p, "else")) return 1;
+    if (check_word(p, "until")) return 1;
+    return 0;
+}
+
+/* Forward declarations */
+static ASTNode *parse_expression(Parser *p);
+static ASTNode *parse_statement(Parser *p);
+static void parse_block(Parser *p, NodeList *list);
+
+/* ---- Expression parsing ---- */
+
+static ASTNode *parse_primary(Parser *p) {
+    Token *tok = current(p);
+
+    if (tok->type == TOK_NUMBER) {
+        advance_parser(p);
+        return ast_number_lit(atof(tok->value), tok->line, tok->col);
+    }
+
+    if (tok->type == TOK_STRING) {
+        advance_parser(p);
+        return ast_string_lit(tok->value, tok->line, tok->col);
+    }
+
+    if (tok->type == TOK_WORD) {
+        if (strcmp(tok->value, "true") == 0) {
+            advance_parser(p);
+            return ast_bool_lit(1, tok->line, tok->col);
+        }
+        if (strcmp(tok->value, "false") == 0) {
+            advance_parser(p);
+            return ast_bool_lit(0, tok->line, tok->col);
+        }
+        if (strcmp(tok->value, "nothing") == 0) {
+            advance_parser(p);
+            return ast_nothing_lit(tok->line, tok->col);
+        }
+        /* Identifier */
+        advance_parser(p);
+        return ast_identifier(tok->value, tok->line, tok->col);
+    }
+
+    if (tok->type == TOK_LPAREN) {
+        advance_parser(p);
+        ASTNode *expr = parse_expression(p);
+        expect_type(p, TOK_RPAREN, "expected ')'");
+        return expr;
+    }
+
+    babel_error_at_token(tok, "expected an expression");
+    return NULL;
+}
+
+static ASTNode *parse_unary(Parser *p) {
+    if (check_word(p, "not")) {
+        Token *op = advance_parser(p);
+        ASTNode *operand = parse_unary(p);
+        return ast_unary("not", operand, op->line, op->col);
+    }
+    if (check_type(p, TOK_MINUS)) {
+        Token *op = advance_parser(p);
+        ASTNode *operand = parse_unary(p);
+        return ast_unary("-", operand, op->line, op->col);
+    }
+    return parse_primary(p);
+}
+
+static ASTNode *parse_multiplication(Parser *p) {
+    ASTNode *left = parse_unary(p);
+    while (check_type(p, TOK_STAR) || check_type(p, TOK_SLASH) || check_type(p, TOK_PERCENT)) {
+        Token *op = advance_parser(p);
+        ASTNode *right = parse_unary(p);
+        left = ast_binary(left, op->value, right, op->line, op->col);
+    }
+    return left;
+}
+
+static ASTNode *parse_addition(Parser *p) {
+    ASTNode *left = parse_multiplication(p);
+    while (check_type(p, TOK_PLUS) || check_type(p, TOK_MINUS)) {
+        Token *op = advance_parser(p);
+        ASTNode *right = parse_multiplication(p);
+        left = ast_binary(left, op->value, right, op->line, op->col);
+    }
+    return left;
+}
+
+static ASTNode *parse_comparison(Parser *p) {
+    ASTNode *left = parse_addition(p);
+    if (check_type(p, TOK_EQ) || check_type(p, TOK_NEQ) ||
+        check_type(p, TOK_GT) || check_type(p, TOK_LT) ||
+        check_type(p, TOK_GTE) || check_type(p, TOK_LTE)) {
+        Token *op = advance_parser(p);
+        ASTNode *right = parse_addition(p);
+        left = ast_binary(left, op->value, right, op->line, op->col);
+    }
+    return left;
+}
+
+static ASTNode *parse_logic_and(Parser *p) {
+    ASTNode *left = parse_comparison(p);
+    while (check_word(p, "and")) {
+        Token *op = advance_parser(p);
+        ASTNode *right = parse_comparison(p);
+        left = ast_binary(left, "and", right, op->line, op->col);
+    }
+    return left;
+}
+
+static ASTNode *parse_logic_or(Parser *p) {
+    ASTNode *left = parse_logic_and(p);
+    while (check_word(p, "or")) {
+        Token *op = advance_parser(p);
+        ASTNode *right = parse_logic_and(p);
+        left = ast_binary(left, "or", right, op->line, op->col);
+    }
+    return left;
+}
+
+static ASTNode *parse_expression(Parser *p) {
+    return parse_logic_or(p);
+}
+
+/* ---- Block parsing ---- */
+
+static void parse_block(Parser *p, NodeList *list) {
+    node_list_init(list);
+    skip_newlines(p);
+    while (!is_block_end(p)) {
+        ASTNode *stmt = parse_statement(p);
+        node_list_push(list, stmt);
+        if (!check_type(p, TOK_EOF) && !is_block_end(p)) {
+            if (!check_type(p, TOK_NEWLINE)) {
+                babel_error_at_token(current(p), "expected end of line after statement");
+            }
+            skip_newlines(p);
+        }
+    }
+}
+
+/* ---- Statement parsing ---- */
+
+static ASTNode *parse_print_stmt(Parser *p) {
+    Token *keyword = advance_parser(p);
+    ASTNode *expr = parse_expression(p);
+    return ast_print(expr, keyword->line, keyword->col);
+}
+
+static ASTNode *parse_assignment(Parser *p) {
+    Token *name_tok = advance_parser(p);
+    advance_parser(p); /* consume 'is' */
+    ASTNode *value = parse_expression(p);
+    return ast_assignment(name_tok->value, value, name_tok->line, name_tok->col);
+}
+
+static ASTNode *parse_if_stmt(Parser *p) {
+    Token *tok = advance_parser(p); /* consume 'if' */
+    ASTNode *condition = parse_expression(p);
+    expect_word(p, "then", "expected 'then' after condition");
+    skip_newlines(p);
+
+    ASTNode *node = calloc(1, sizeof(ASTNode));
+    node->type = NODE_IF_STMT;
+    node->line = tok->line;
+    node->col = tok->col;
+    node->as.if_stmt.condition = condition;
+    node->as.if_stmt.else_if = NULL;
+
+    parse_block(p, &node->as.if_stmt.body);
+    node_list_init(&node->as.if_stmt.else_body);
+
+    if (check_word(p, "else")) {
+        advance_parser(p);
+        skip_newlines(p);
+
+        if (check_word(p, "if")) {
+            node->as.if_stmt.else_if = parse_if_stmt(p);
+            return node;
+        } else {
+            parse_block(p, &node->as.if_stmt.else_body);
+        }
+    }
+
+    expect_word(p, "end", "expected 'end' to close if statement");
+    return node;
+}
+
+static ASTNode *parse_while_stmt(Parser *p) {
+    Token *tok = advance_parser(p); /* consume 'while' */
+    ASTNode *condition = parse_expression(p);
+    expect_block_start(p); /* 'do' is optional */
+
+    ASTNode *node = calloc(1, sizeof(ASTNode));
+    node->type = NODE_WHILE_STMT;
+    node->line = tok->line;
+    node->col = tok->col;
+    node->as.while_stmt.condition = condition;
+    parse_block(p, &node->as.while_stmt.body);
+
+    expect_word(p, "end", "expected 'end' to close while loop");
+    return node;
+}
+
+static ASTNode *parse_until_stmt(Parser *p) {
+    /* "until EXPR ... end" → same as "while not EXPR ... end" */
+    Token *tok = advance_parser(p); /* consume 'until' */
+    ASTNode *condition = parse_expression(p);
+    expect_block_start(p);
+
+    /* Wrap condition in "not" */
+    ASTNode *negated = ast_unary("not", condition, tok->line, tok->col);
+
+    ASTNode *node = calloc(1, sizeof(ASTNode));
+    node->type = NODE_WHILE_STMT;
+    node->line = tok->line;
+    node->col = tok->col;
+    node->as.while_stmt.condition = negated;
+    parse_block(p, &node->as.while_stmt.body);
+
+    expect_word(p, "end", "expected 'end' to close until loop");
+    return node;
+}
+
+static char *str_dup_parser(const char *s) {
+    char *d = malloc(strlen(s) + 1);
+    strcpy(d, s);
+    return d;
+}
+
+static ASTNode *parse_for_stmt(Parser *p) {
+    Token *tok = advance_parser(p); /* consume 'for' */
+
+    Token *var_tok = expect_type(p, TOK_WORD, "expected variable name after 'for'");
+
+    if (check_word(p, "from")) {
+        /* for-range: for VAR from START to END [as ALIAS] [do] ... end */
+        advance_parser(p);
+        ASTNode *start = parse_expression(p);
+        expect_word(p, "to", "expected 'to' in for-range loop");
+        ASTNode *end_expr = parse_expression(p);
+
+        /* Check for "as IDENT" — renames the loop variable.
+         * This supports "count from 1 to 10 as i" where the normalizer
+         * emits "for _counter from 1 to 10 as i do" */
+        char *actual_var = str_dup_parser(var_tok->value);
+        if (check_word(p, "as")) {
+            advance_parser(p);
+            Token *alias = expect_type(p, TOK_WORD, "expected variable name after 'as'");
+            free(actual_var);
+            actual_var = str_dup_parser(alias->value);
+        }
+
+        expect_block_start(p);
+
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_FOR_RANGE_STMT;
+        node->line = tok->line;
+        node->col = tok->col;
+        node->as.for_range.var_name = actual_var;
+        node->as.for_range.start = start;
+        node->as.for_range.end = end_expr;
+        parse_block(p, &node->as.for_range.body);
+
+        expect_word(p, "end", "expected 'end' to close for loop");
+        return node;
+    } else if (check_word(p, "in")) {
+        /* for-in: for ITEM in COLLECTION [do] ... end */
+        advance_parser(p);
+        ASTNode *collection = parse_expression(p);
+        expect_block_start(p);
+
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_FOR_IN_STMT;
+        node->line = tok->line;
+        node->col = tok->col;
+        node->as.for_in.var_name = str_dup_parser(var_tok->value);
+        node->as.for_in.collection = collection;
+        parse_block(p, &node->as.for_in.body);
+
+        expect_word(p, "end", "expected 'end' to close for loop");
+        return node;
+    } else {
+        babel_error_at_token(current(p), "expected 'from' or 'in' after for variable");
+        return NULL;
+    }
+}
+
+static ASTNode *parse_loop_stmt(Parser *p) {
+    Token *tok = advance_parser(p); /* consume 'loop' */
+    skip_newlines(p);
+
+    ASTNode *node = calloc(1, sizeof(ASTNode));
+    node->type = NODE_LOOP_STMT;
+    node->line = tok->line;
+    node->col = tok->col;
+    parse_block(p, &node->as.loop_stmt.body);
+
+    /* "loop ... end" OR "loop ... until EXPR" */
+    if (check_word(p, "until")) {
+        advance_parser(p);
+        ASTNode *condition = parse_expression(p);
+        /* Convert to while loop: while(not condition) { body }
+         * But we need do-while semantics (body runs at least once).
+         * Generate: body once + while(not condition) { body }
+         * Actually, simpler to just use the loop node and let codegen
+         * handle "until" — let's add an until_condition to the loop. */
+        /* For simplicity, rewrite as: the block already ran, so we
+         * wrap this as: while(1) { BODY; if(COND) break; } */
+        /* Add a break-if at the end of the body */
+        ASTNode *break_node = calloc(1, sizeof(ASTNode));
+        break_node->type = NODE_BREAK_STMT;
+        break_node->line = tok->line;
+        break_node->col = tok->col;
+
+        ASTNode *if_break = calloc(1, sizeof(ASTNode));
+        if_break->type = NODE_IF_STMT;
+        if_break->line = tok->line;
+        if_break->col = tok->col;
+        if_break->as.if_stmt.condition = condition;
+        if_break->as.if_stmt.else_if = NULL;
+        node_list_init(&if_break->as.if_stmt.body);
+        node_list_push(&if_break->as.if_stmt.body, break_node);
+        node_list_init(&if_break->as.if_stmt.else_body);
+
+        node_list_push(&node->as.loop_stmt.body, if_break);
+        return node;
+    }
+
+    expect_word(p, "end", "expected 'end' or 'until' to close loop");
+    return node;
+}
+
+static ASTNode *parse_statement(Parser *p) {
+    Token *tok = current(p);
+
+    /* Print statement */
+    if (tok->type == TOK_WORD && is_print_keyword(tok->value)) {
+        return parse_print_stmt(p);
+    }
+
+    /* If statement */
+    if (check_word(p, "if")) {
+        return parse_if_stmt(p);
+    }
+
+    /* While loop */
+    if (check_word(p, "while")) {
+        return parse_while_stmt(p);
+    }
+
+    /* Until loop */
+    if (check_word(p, "until")) {
+        return parse_until_stmt(p);
+    }
+
+    /* For loop */
+    if (check_word(p, "for")) {
+        return parse_for_stmt(p);
+    }
+
+    /* Infinite loop */
+    if (check_word(p, "loop")) {
+        return parse_loop_stmt(p);
+    }
+
+    /* Break */
+    if (check_word(p, "break")) {
+        Token *brk = advance_parser(p);
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_BREAK_STMT;
+        node->line = brk->line;
+        node->col = brk->col;
+        return node;
+    }
+
+    /* Continue / skip */
+    if (check_word(p, "continue") || check_word(p, "skip")) {
+        Token *cont = advance_parser(p);
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_CONTINUE_STMT;
+        node->line = cont->line;
+        node->col = cont->col;
+        return node;
+    }
+
+    /* Assignment: IDENT is EXPR */
+    if (tok->type == TOK_WORD) {
+        if (p->pos + 1 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD &&
+            strcmp(p->tokens[p->pos + 1].value, "is") == 0) {
+            return parse_assignment(p);
+        }
+    }
+
+    /* Expression statement */
+    ASTNode *expr = parse_expression(p);
+    return expr;
+}
+
+ASTNode *parser_parse(Parser *p) {
+    ASTNode *program = ast_program();
+
+    skip_newlines(p);
+    while (!check_type(p, TOK_EOF)) {
+        ASTNode *stmt = parse_statement(p);
+        node_list_push(&program->as.program.stmts, stmt);
+
+        if (!check_type(p, TOK_EOF) && !check_type(p, TOK_NEWLINE)) {
+            babel_error_at_token(current(p), "expected end of line after statement");
+        }
+        skip_newlines(p);
+    }
+
+    return program;
+}

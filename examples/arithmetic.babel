@@ -1,0 +1,25 @@
+-- Basic variables and arithmetic
+x is 5
+y is 10
+z is x + y
+display z
+
+-- Using natural language sugar
+let a be 3
+let b be 7
+let c be a plus b
+display c
+
+-- Reassignment
+x is now 42
+display x
+
+-- Math operations
+display 10 - 3
+display 4 * 5
+display 20 / 4
+display 17 modulo 5
+
+-- Mixed sugar
+set result to 100 + 50
+display result

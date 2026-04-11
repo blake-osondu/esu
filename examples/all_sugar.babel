@@ -1,0 +1,42 @@
+-- Addition (6 variants)
+display 3 plus 2
+display 3 add 2
+display 3 adding 2
+display 3 added to 2
+display 3 increased by 2
+
+-- Subtraction (6 variants)
+display 10 minus 3
+display 10 subtract 3
+display 10 subtracting 3
+display 10 subtracted from 3
+display 10 decreased by 3
+display 10 take away 3
+
+-- Multiplication (4 variants)
+display 4 times 5
+display 4 multiply 5
+display 4 multiplying 5
+display 4 multiplied by 5
+
+-- Division (4 variants)
+display 20 divided by 4
+display 20 divide 4
+display 20 dividing 4
+display 20 over 4
+
+-- Modulo (4 variants)
+display 17 modulo 5
+display 17 mod 5
+display 17 remainder 5
+display 17 remainder of 5
+
+-- Comparison variants
+x is 10
+y is 5
+display x is greater than y
+display x is more than y
+display x is bigger than y
+display x exceeds y
+display y is less than x
+display y is smaller than x

@@ -1,0 +1,131 @@
+-- ===== CONDITIONAL SUGAR =====
+
+-- "when" (instead of "if")
+x is 10
+when x is bigger than 5 then
+    display "when: x is big"
+end
+
+-- "whenever"
+whenever x equals 10 then
+    display "whenever: x is 10"
+end
+
+-- "suppose"
+suppose x is more than 3 then
+    display "suppose: yes"
+otherwise
+    display "suppose: no"
+end
+
+-- "assuming"
+assuming x is at least 10 then
+    display "assuming: at least 10"
+end
+
+-- "given that"
+given that x is less than 100 then
+    display "given that: under 100"
+end
+
+-- "given" (shorter form)
+given x equals 10 then
+    display "given: equals 10"
+end
+
+-- "in the event that"
+in the event that x is at most 10 then
+    display "in the event: at most 10"
+end
+
+-- "in case"
+in case x is greater than 0 then
+    display "in case: positive"
+end
+
+-- "should"
+should x be bigger than 5 then
+    display "should: bigger than 5"
+end
+
+-- ===== ELSE BRANCH SUGAR =====
+
+-- "or else"
+y is 3
+when y is bigger than 10 then
+    display "big"
+or else
+    display "or else: small"
+end
+
+-- "if not"
+when y exceeds 10 then
+    display "big"
+if not
+    display "if not: small"
+end
+
+-- "but if" (else-if chain)
+score is 85
+when score is at least 90 then
+    display "A"
+but if score is at least 80 then
+    display "but if: B"
+otherwise
+    display "F"
+end
+
+-- "except when"
+z is 7
+when z equals 10 then
+    display "ten"
+except when z is bigger than 5 then
+    display "except when: bigger than 5"
+otherwise
+    display "small"
+end
+
+-- ===== LOOP SUGAR =====
+
+-- "as long as" (instead of "while ... do")
+let count be 3
+as long as count is bigger than 0
+    display count
+    count is count - 1
+end
+
+-- "repeat N times"
+repeat 3 times
+    display "hello"
+end
+
+-- "until" loop (inverted while)
+let n be 0
+until n equals 5
+    n is n + 1
+end
+display n
+
+-- "loop ... until" (do-while style)
+let m be 0
+loop
+    m is m + 1
+    display m
+until m equals 3
+
+-- "count from X to Y as VAR"
+count from 1 to 5 as i
+    display i
+end
+
+-- "go through" (maps to for)
+go through 1 to 4 as num
+    display num
+end
+
+-- "keep doing ... until"
+let k be 10
+keep doing
+    k is k - 3
+    display k
+until k is at most 0

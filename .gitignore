@@ -1,0 +1,8 @@
+build/
+*.o
+*.a
+*.babel.c
+output
+/hello
+*.dSYM/
+.DS_Store

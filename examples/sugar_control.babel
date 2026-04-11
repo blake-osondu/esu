@@ -1,0 +1,19 @@
+-- "check if" and "otherwise" sugar
+x is 7
+check if x is more than 10 then
+    display "big"
+otherwise
+    display "small"
+end
+
+-- "repeat while" sugar
+let count be 3
+repeat while count is bigger than 0 do
+    display count
+    change count to count - 1
+end
+
+-- "for each" sugar (normalizer strips "each")
+for each i from 1 to 3 do
+    say i
+end

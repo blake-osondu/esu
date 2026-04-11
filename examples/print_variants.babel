@@ -1,0 +1,4 @@
+display "Hello from display"
+print "Hello from print"
+show "Hello from show"
+say "Hello from say"

@@ -1,0 +1,11 @@
+for n from 1 to 30 do
+    if n modulo 15 equals 0 then
+        display "FizzBuzz"
+    else if n modulo 3 equals 0 then
+        display "Fizz"
+    else if n modulo 5 equals 0 then
+        display "Buzz"
+    else
+        display n
+    end
+end
