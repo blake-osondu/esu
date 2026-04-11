@@ -149,8 +149,14 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         }
 
         case NODE_FUNCTION_CALL: {
-            emit_c_ident(cg, "babel_func_", node->as.func_call.name);
-            emit(cg, "(");
+            const char *name = node->as.func_call.name;
+            if (strncmp(name, "__", 2) == 0) {
+                /* Builtin: __length → babel_length, __contains → babel_contains, etc. */
+                emit(cg, "babel%s(", name + 1); /* __X → babel_X */
+            } else {
+                emit_c_ident(cg, "babel_func_", name);
+                emit(cg, "(");
+            }
             for (int i = 0; i < node->as.func_call.arg_count; i++) {
                 if (i > 0) emit(cg, ", ");
                 gen_expression(cg, node->as.func_call.args[i]);

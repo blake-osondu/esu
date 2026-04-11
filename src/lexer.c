@@ -9,6 +9,14 @@ void lexer_init(Lexer *lex, const char *source) {
     lex->pos = 0;
     lex->line = 1;
     lex->col = 1;
+    lex->queue_count = 0;
+    lex->queue_read = 0;
+}
+
+static void lexer_enqueue(Lexer *lex, Token tok) {
+    if (lex->queue_count < LEXER_QUEUE_MAX) {
+        lex->queue[lex->queue_count++] = tok;
+    }
 }
 
 static char peek(Lexer *lex) {
@@ -45,6 +53,9 @@ static Token make_token_char(TokenType type, char c, int line, int col) {
     char buf[2] = { c, '\0' };
     return make_token(type, buf, line, col);
 }
+
+/* Forward declaration for use in string interpolation */
+Token lexer_next(Lexer *lex);
 
 static void skip_whitespace(Lexer *lex) {
     while (peek(lex) == ' ' || peek(lex) == '\t' || peek(lex) == '\r') {
@@ -105,11 +116,68 @@ static Token lex_number(Lexer *lex) {
     return tok;
 }
 
+/*
+ * Lex a string literal with interpolation support.
+ * "Hello, {name}!" becomes:
+ *   ( TOK_STRING("Hello, ") TOK_PLUS IDENT(name) TOK_PLUS TOK_STRING("!") )
+ * Wrapped in parens so it's a single expression.
+ * Returns the first token; remaining tokens are enqueued.
+ */
 static Token lex_string(Lexer *lex) {
     int line = lex->line;
     int col = lex->col;
 
     advance(lex); /* consume opening " */
+
+    /* First pass: scan to see if there's any interpolation */
+    int save_pos = lex->pos;
+    int has_interp = 0;
+    while (lex->source[save_pos] != '"' && lex->source[save_pos] != '\0') {
+        if (lex->source[save_pos] == '\\') { save_pos += 2; continue; }
+        if (lex->source[save_pos] == '{') { has_interp = 1; break; }
+        save_pos++;
+    }
+
+    if (!has_interp) {
+        /* Simple string — no interpolation */
+        int cap = 64;
+        char *buf = malloc(cap);
+        int len = 0;
+        while (peek(lex) != '"' && peek(lex) != '\0') {
+            if (peek(lex) == '\\') {
+                advance(lex);
+                char c = advance(lex);
+                char escaped;
+                switch (c) {
+                    case 'n':  escaped = '\n'; break;
+                    case 't':  escaped = '\t'; break;
+                    case '\\': escaped = '\\'; break;
+                    case '"':  escaped = '"';  break;
+                    default:   escaped = c;    break;
+                }
+                if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+                buf[len++] = escaped;
+            } else {
+                if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+                buf[len++] = advance(lex);
+            }
+        }
+        if (peek(lex) == '"') advance(lex);
+        buf[len] = '\0';
+        Token tok = make_token(TOK_STRING, buf, line, col);
+        free(buf);
+        return tok;
+    }
+
+    /* Has interpolation — collect all parts into the queue, then
+     * return the first token. Parts are joined by +. Wrapped in ( ). */
+
+    /* Temporary storage for all the tokens we'll produce */
+    Token parts[LEXER_QUEUE_MAX];
+    int part_count = 0;
+
+    /* Helper macro to add a token to parts */
+    #define ADD_PART(t) do { if (part_count < LEXER_QUEUE_MAX) parts[part_count++] = (t); } while(0)
 
     int cap = 64;
     char *buf = malloc(cap);
@@ -125,29 +193,83 @@ static Token lex_string(Lexer *lex) {
                 case 't':  escaped = '\t'; break;
                 case '\\': escaped = '\\'; break;
                 case '"':  escaped = '"';  break;
+                case '{':  escaped = '{';  break;
                 default:   escaped = c;    break;
             }
             if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
             buf[len++] = escaped;
+        } else if (peek(lex) == '{') {
+            advance(lex); /* consume '{' */
+
+            /* Emit the string segment so far */
+            if (len > 0 || part_count == 0) {
+                if (part_count > 0) ADD_PART(make_token_char(TOK_PLUS, '+', line, col));
+                buf[len] = '\0';
+                ADD_PART(make_token(TOK_STRING, buf, line, col));
+            }
+
+            /* Add + before the expression */
+            if (part_count > 0) ADD_PART(make_token_char(TOK_PLUS, '+', line, col));
+
+            /* Lex expression tokens inside {}, wrapped in parens for precedence */
+            ADD_PART(make_token_char(TOK_LPAREN, '(', line, col));
+            while (peek(lex) != '}' && peek(lex) != '\0') {
+                skip_whitespace(lex);
+                if (peek(lex) == '}') break;
+                Token inner = lexer_next(lex);
+                if (inner.type == TOK_EOF) break;
+                ADD_PART(inner);
+            }
+            ADD_PART(make_token_char(TOK_RPAREN, ')', line, col));
+            if (peek(lex) == '}') advance(lex);
+
+            /* Reset string buffer */
+            len = 0;
         } else {
             if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
             buf[len++] = advance(lex);
         }
     }
 
-    if (peek(lex) == '"') {
-        advance(lex); /* consume closing " */
-    } else {
-        fprintf(stderr, "Error: unterminated string at line %d, col %d\n", line, col);
+    if (peek(lex) == '"') advance(lex);
+
+    /* Emit trailing string segment if any */
+    if (len > 0) {
+        if (part_count > 0) ADD_PART(make_token_char(TOK_PLUS, '+', line, col));
+        buf[len] = '\0';
+        ADD_PART(make_token(TOK_STRING, buf, line, col));
+    }
+    free(buf);
+
+    #undef ADD_PART
+
+    if (part_count == 0) {
+        return make_token(TOK_STRING, "", line, col);
     }
 
-    buf[len] = '\0';
-    Token tok = make_token(TOK_STRING, buf, line, col);
-    free(buf);
-    return tok;
+    /* Wrap in parentheses to ensure correct precedence */
+    Token open_paren = make_token_char(TOK_LPAREN, '(', line, col);
+
+    /* Enqueue: all parts + close paren */
+    for (int i = 0; i < part_count; i++) {
+        lexer_enqueue(lex, parts[i]);
+    }
+    lexer_enqueue(lex, make_token_char(TOK_RPAREN, ')', line, col));
+
+    return open_paren;
 }
 
 Token lexer_next(Lexer *lex) {
+    /* Return queued tokens first (from string interpolation) */
+    if (lex->queue_read < lex->queue_count) {
+        return lex->queue[lex->queue_read++];
+    }
+    /* Reset queue when drained */
+    if (lex->queue_count > 0) {
+        lex->queue_count = 0;
+        lex->queue_read = 0;
+    }
+
     skip_whitespace(lex);
 
     int line = lex->line;

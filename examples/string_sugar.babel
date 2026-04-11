@@ -1,0 +1,51 @@
+-- === Length variations ===
+display length of "hello"
+display size of "hello"
+display number of letters in "hello"
+display number of characters in "testing"
+
+-- === Case variations ===
+display "hello" in uppercase
+display "hello" in caps
+display "hello" in all caps
+display "hello" uppercased
+display "HELLO" in lowercase
+display "HELLO" lowercased
+
+-- === Contains variations ===
+display "hello world" contains "world"
+display "hello world" has "world" in it
+display "hello world" has "xyz" in it
+
+-- === Starts/ends with variations ===
+display "hello" starts with "hel"
+display "hello" begins with "hel"
+display "hello" ends with "llo"
+
+-- === First/last character ===
+display first letter of "hello"
+display first character of "hello"
+display last letter of "hello"
+display last character of "hello"
+display character 2 of "hello"
+display letter 0 of "hello"
+display character at first index of "hello"
+display character at last index of "hello"
+
+-- === Replace variations ===
+display "hello world" replaced "world" with "Babel"
+display "hello world" replacing "world" with "Babel"
+display replace "world" with "Babel" in "hello world"
+
+-- === Trim ===
+display "  hello  " trimmed
+
+-- === Chaining ===
+display "  hello world  " trimmed in uppercase
+display "hello" in caps replaced "HELLO" with "HI"
+
+-- === Interpolation with string ops ===
+name is "babel"
+display "Name in caps: {name in uppercase}"
+display "Length: {length of name}"
+display "First letter: {first character of name}"

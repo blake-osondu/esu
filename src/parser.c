@@ -95,6 +95,9 @@ static void expect_block_end(Parser *p, const char *context) {
 /* Forward declarations */
 static ASTNode *parse_expression(Parser *p);
 static ASTNode *parse_comparison(Parser *p);
+static ASTNode *parse_primary(Parser *p);
+static ASTNode *parse_postfix(Parser *p);
+static int looks_like_past_tense(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static void parse_block(Parser *p, NodeList *list);
 
@@ -109,8 +112,148 @@ static int check_two_words(Parser *p, const char *w1, const char *w2) {
 }
 
 
+/* Create a builtin function call node. Builtin names start with "__" to
+ * distinguish from user functions in codegen. */
+static ASTNode *make_builtin_call(const char *name, ASTNode **args, int argc, int line, int col) {
+    return ast_function_call(name, args, argc, line, col);
+}
+
 static ASTNode *parse_primary(Parser *p) {
     Token *tok = current(p);
+
+    /* ===== BUILTIN PREFIX EXPRESSIONS ===== */
+
+    /* --- Length --- */
+    /* "length of X" / "size of X" → __length(X) */
+    if (check_two_words(p, "length", "of") || check_two_words(p, "size", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        ASTNode *arg = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = arg;
+        return make_builtin_call("__length", args, 1, t->line, t->col);
+    }
+    /* "number of letters in X" / "number of characters in X" → __length(X) */
+    if (check_word(p, "number") && p->pos + 3 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "of") == 0 &&
+        p->tokens[p->pos + 2].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 2].value, "letters") == 0 ||
+         strcmp(p->tokens[p->pos + 2].value, "characters") == 0) &&
+        p->tokens[p->pos + 3].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 3].value, "in") == 0) {
+        Token *t = advance_parser(p);
+        advance_parser(p); advance_parser(p); advance_parser(p); /* skip "of letters/characters in" */
+        ASTNode *arg = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = arg;
+        return make_builtin_call("__length", args, 1, t->line, t->col);
+    }
+
+    /* --- Character access --- */
+    /* "first letter/character of X" → __char_at(X, 0) */
+    if (check_word(p, "first") && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "letter") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "character") == 0) &&
+        p->tokens[p->pos + 2].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 2].value, "of") == 0) {
+        Token *t = advance_parser(p);
+        advance_parser(p); advance_parser(p); /* skip "letter/character of" */
+        ASTNode *str = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = str;
+        args[1] = ast_number_lit(0, t->line, t->col);
+        return make_builtin_call("__char_at", args, 2, t->line, t->col);
+    }
+    /* "last letter/character of X" → __char_at(X, length-1) — use __last_char */
+    if (check_word(p, "last") && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "letter") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "character") == 0) &&
+        p->tokens[p->pos + 2].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 2].value, "of") == 0) {
+        Token *t = advance_parser(p);
+        advance_parser(p); advance_parser(p); /* skip "letter/character of" */
+        ASTNode *str = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = str;
+        return make_builtin_call("__last_char", args, 1, t->line, t->col);
+    }
+    /* "character/letter N of X" → __char_at(X, N) */
+    if ((check_word(p, "character") || check_word(p, "letter")) &&
+        p->pos + 1 < p->count && p->tokens[p->pos + 1].type != TOK_NEWLINE) {
+        Token *t = advance_parser(p);
+        /* Check for "at first/last index of X" */
+        if (check_word(p, "at")) {
+            advance_parser(p); /* consume "at" */
+            if (check_word(p, "first")) {
+                advance_parser(p); /* consume "first" */
+                if (check_word(p, "index")) advance_parser(p); /* optional "index" */
+                expect_word(p, "of", "expected 'of'");
+                ASTNode *str = parse_postfix(p);
+                ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                args[0] = str;
+                args[1] = ast_number_lit(0, t->line, t->col);
+                return make_builtin_call("__char_at", args, 2, t->line, t->col);
+            } else if (check_word(p, "last")) {
+                advance_parser(p); /* consume "last" */
+                if (check_word(p, "index")) advance_parser(p);
+                expect_word(p, "of", "expected 'of'");
+                ASTNode *str = parse_postfix(p);
+                ASTNode **args = malloc(sizeof(ASTNode *));
+                args[0] = str;
+                return make_builtin_call("__last_char", args, 1, t->line, t->col);
+            }
+        }
+        /* "character N of X" */
+        ASTNode *idx = parse_primary(p);
+        expect_word(p, "of", "expected 'of' in 'character N of X'");
+        ASTNode *str = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = str;
+        args[1] = idx;
+        return make_builtin_call("__char_at", args, 2, t->line, t->col);
+    }
+
+    /* --- Replace (prefix form) --- */
+    /* "replace X with Y in Z" → __replace(Z, X, Y) */
+    if (check_word(p, "replace") && !looks_like_past_tense(p)) {
+        Token *t = advance_parser(p);
+        ASTNode *old_s = parse_primary(p);
+        expect_word(p, "with", "expected 'with' in 'replace X with Y in Z'");
+        ASTNode *new_s = parse_primary(p);
+        expect_word(p, "in", "expected 'in' in 'replace X with Y in Z'");
+        ASTNode *str = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+        args[0] = str; args[1] = old_s; args[2] = new_s;
+        return make_builtin_call("__replace", args, 3, t->line, t->col);
+    }
+
+    /* --- Input --- */
+    /* "input" / "input(prompt)" / "input prompt" → __input */
+    if (check_word(p, "input")) {
+        Token *t = advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        if (check_type(p, TOK_LPAREN)) {
+            advance_parser(p);
+            args[0] = parse_expression(p);
+            expect_type(p, TOK_RPAREN, "expected ')' after input prompt");
+            return make_builtin_call("__input", args, 1, t->line, t->col);
+        } else if (check_type(p, TOK_STRING)) {
+            args[0] = parse_primary(p);
+            return make_builtin_call("__input", args, 1, t->line, t->col);
+        }
+        free(args);
+        return make_builtin_call("__input_no_prompt", NULL, 0, t->line, t->col);
+    }
+    /* "ask EXPR" → __input(EXPR) */
+    if (check_word(p, "ask")) {
+        Token *t = advance_parser(p);
+        ASTNode *prompt = parse_primary(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = prompt;
+        return make_builtin_call("__input", args, 1, t->line, t->col);
+    }
 
     /* Named math operations: "the sum of X and Y" → X + Y
      * "the" is stripped by normalizer in mid-expression, so we check for
@@ -283,7 +426,9 @@ static int looks_like_past_tense(Parser *p) {
     if (len < 4) return 0;
     /* Don't match keywords */
     if (strcmp(w, "continued") == 0 || strcmp(w, "returned") == 0 ||
-        strcmp(w, "called") == 0 || strcmp(w, "displayed") == 0) return 0;
+        strcmp(w, "called") == 0 || strcmp(w, "displayed") == 0 ||
+        strcmp(w, "replaced") == 0 || strcmp(w, "uppercased") == 0 ||
+        strcmp(w, "lowercased") == 0 || strcmp(w, "trimmed") == 0) return 0;
     if (len > 3 && strcmp(w + len - 3, "ied") == 0) return 1;
     if (len > 2 && strcmp(w + len - 2, "ed") == 0) return 1;
     return 0;
@@ -299,7 +444,10 @@ static int looks_like_prefix_verb(Parser *p) {
     /* Don't match keywords */
     if (strcmp(w, "taking") == 0 || strcmp(w, "calling") == 0 ||
         strcmp(w, "equals") == 0 || strcmp(w, "exceeds") == 0 ||
-        strcmp(w, "nothing") == 0 || strcmp(w, "this") == 0) return 0;
+        strcmp(w, "nothing") == 0 || strcmp(w, "this") == 0 ||
+        strcmp(w, "replacing") == 0 || strcmp(w, "begins") == 0 ||
+        strcmp(w, "starts") == 0 || strcmp(w, "ends") == 0 ||
+        strcmp(w, "contains") == 0 || strcmp(w, "has") == 0) return 0;
     if (len > 4 && strcmp(w + len - 4, "ying") == 0) return 1;
     if (len > 3 && strcmp(w + len - 3, "ing") == 0) return 1;
     if (len > 3 && strcmp(w + len - 3, "ies") == 0) return 1;
@@ -333,6 +481,176 @@ static ASTNode *parse_postfix(Parser *p) {
             args[0] = expr;
             expr = ast_function_call(verb->value, args, 1, verb->line, verb->col);
         }
+    }
+
+    /* Postfix builtin string operations */
+    for (;;) {
+        /* --- Contains --- */
+        /* "x contains Y" → __contains(x, Y) */
+        if (check_word(p, "contains")) {
+            Token *t = advance_parser(p);
+            ASTNode *arg = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = expr; args[1] = arg;
+            expr = make_builtin_call("__contains", args, 2, t->line, t->col);
+            continue;
+        }
+        /* "x has Y in it" → __contains(x, Y) */
+        if (check_word(p, "has") && !check_two_words(p, "has", "key")) {
+            Token *t = advance_parser(p);
+            ASTNode *arg = parse_primary(p);
+            /* consume "in it" if present */
+            if (check_word(p, "in")) { advance_parser(p); }
+            if (check_word(p, "it")) { advance_parser(p); }
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = expr; args[1] = arg;
+            expr = make_builtin_call("__contains", args, 2, t->line, t->col);
+            continue;
+        }
+
+        /* --- Starts/ends with --- */
+        /* "x starts with Y" / "x begins with Y" → __starts_with(x, Y) */
+        if (check_two_words(p, "starts", "with") || check_two_words(p, "begins", "with")) {
+            Token *t = advance_parser(p); advance_parser(p);
+            ASTNode *arg = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = expr; args[1] = arg;
+            expr = make_builtin_call("__starts_with", args, 2, t->line, t->col);
+            continue;
+        }
+        /* "x ends with Y" → __ends_with(x, Y) */
+        if (check_two_words(p, "ends", "with")) {
+            Token *t = advance_parser(p); advance_parser(p);
+            ASTNode *arg = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = expr; args[1] = arg;
+            expr = make_builtin_call("__ends_with", args, 2, t->line, t->col);
+            continue;
+        }
+        /* "x is at the beginning/start of Y" → __starts_with(Y, x) (note: reversed) */
+        if (check_word(p, "is") && p->pos + 3 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD &&
+            strcmp(p->tokens[p->pos + 1].value, "at") == 0) {
+            /* Look for "is at the beginning/start of" or "is at the end of" */
+            int peek = p->pos + 2;
+            if (peek < p->count && p->tokens[peek].type == TOK_WORD &&
+                (strcmp(p->tokens[peek].value, "beginning") == 0 ||
+                 strcmp(p->tokens[peek].value, "start") == 0)) {
+                Token *t = advance_parser(p); /* is */
+                advance_parser(p); /* at */
+                advance_parser(p); /* beginning/start */
+                if (check_word(p, "of")) advance_parser(p);
+                ASTNode *str = parse_primary(p);
+                ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                args[0] = str; args[1] = expr; /* reversed: Y starts with x */
+                expr = make_builtin_call("__starts_with", args, 2, t->line, t->col);
+                continue;
+            }
+            if (peek < p->count && p->tokens[peek].type == TOK_WORD &&
+                strcmp(p->tokens[peek].value, "end") == 0) {
+                Token *t = advance_parser(p); /* is */
+                advance_parser(p); /* at */
+                advance_parser(p); /* end */
+                if (check_word(p, "of")) advance_parser(p);
+                ASTNode *str = parse_primary(p);
+                ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                args[0] = str; args[1] = expr; /* reversed: Y ends with x */
+                expr = make_builtin_call("__ends_with", args, 2, t->line, t->col);
+                continue;
+            }
+        }
+
+        /* --- Case conversion --- */
+        /* "x in uppercase" / "x in caps" / "x in all caps" */
+        if (check_word(p, "in") && p->pos + 1 < p->count) {
+            const char *next_val = p->tokens[p->pos + 1].value;
+            if (p->tokens[p->pos + 1].type == TOK_WORD &&
+                (strcmp(next_val, "uppercase") == 0 || strcmp(next_val, "caps") == 0)) {
+                Token *t = advance_parser(p); advance_parser(p);
+                ASTNode **args = malloc(sizeof(ASTNode *));
+                args[0] = expr;
+                expr = make_builtin_call("__to_upper", args, 1, t->line, t->col);
+                continue;
+            }
+            if (p->tokens[p->pos + 1].type == TOK_WORD &&
+                strcmp(next_val, "all") == 0 &&
+                p->pos + 2 < p->count &&
+                p->tokens[p->pos + 2].type == TOK_WORD &&
+                strcmp(p->tokens[p->pos + 2].value, "caps") == 0) {
+                Token *t = advance_parser(p); advance_parser(p); advance_parser(p);
+                ASTNode **args = malloc(sizeof(ASTNode *));
+                args[0] = expr;
+                expr = make_builtin_call("__to_upper", args, 1, t->line, t->col);
+                continue;
+            }
+            if (p->tokens[p->pos + 1].type == TOK_WORD &&
+                strcmp(next_val, "lowercase") == 0) {
+                Token *t = advance_parser(p); advance_parser(p);
+                ASTNode **args = malloc(sizeof(ASTNode *));
+                args[0] = expr;
+                expr = make_builtin_call("__to_lower", args, 1, t->line, t->col);
+                continue;
+            }
+        }
+        /* "x uppercased" / "x lowercased" */
+        if (check_word(p, "uppercased")) {
+            Token *t = advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = make_builtin_call("__to_upper", args, 1, t->line, t->col);
+            continue;
+        }
+        if (check_word(p, "lowercased")) {
+            Token *t = advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = make_builtin_call("__to_lower", args, 1, t->line, t->col);
+            continue;
+        }
+
+        /* --- Replace (postfix) --- */
+        /* "x replaced OLD with NEW" → __replace(x, OLD, NEW) */
+        if (check_word(p, "replaced") && !check_two_words(p, "replaced", "by")) {
+            Token *t = advance_parser(p);
+            ASTNode *old_s = parse_primary(p);
+            expect_word(p, "with", "expected 'with' in 'replaced X with Y'");
+            ASTNode *new_s = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+            args[0] = expr; args[1] = old_s; args[2] = new_s;
+            expr = make_builtin_call("__replace", args, 3, t->line, t->col);
+            continue;
+        }
+        /* "x replaced by NEW in STR" → __replace(STR, x, NEW) — note: x is the old value */
+        if (check_two_words(p, "replaced", "by")) {
+            Token *t = advance_parser(p); advance_parser(p); /* consume "replaced by" */
+            ASTNode *new_s = parse_primary(p);
+            expect_word(p, "in", "expected 'in' in 'X replaced by Y in Z'");
+            ASTNode *str = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+            args[0] = str; args[1] = expr; args[2] = new_s;
+            expr = make_builtin_call("__replace", args, 3, t->line, t->col);
+            continue;
+        }
+        /* "x replacing OLD with NEW" → __replace(x, OLD, NEW) */
+        if (check_word(p, "replacing")) {
+            Token *t = advance_parser(p);
+            ASTNode *old_s = parse_primary(p);
+            expect_word(p, "with", "expected 'with' in 'replacing X with Y'");
+            ASTNode *new_s = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+            args[0] = expr; args[1] = old_s; args[2] = new_s;
+            expr = make_builtin_call("__replace", args, 3, t->line, t->col);
+            continue;
+        }
+        /* "x trimmed" → __trim(x) */
+        if (check_word(p, "trimmed")) {
+            Token *t = advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = make_builtin_call("__trim", args, 1, t->line, t->col);
+            continue;
+        }
+        break;
     }
 
     return expr;

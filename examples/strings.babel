@@ -1,0 +1,36 @@
+-- String interpolation
+name is "World"
+display "Hello, {name}!"
+display "2 + 3 = {2 + 3}"
+
+-- Length
+display length of "hello"
+display size of "testing"
+
+-- Case conversion
+display "hello" in uppercase
+display "WORLD" in lowercase
+
+-- Contains
+display "hello world" contains "world"
+display "hello world" contains "xyz"
+
+-- Starts/ends with
+display "hello" starts with "hel"
+display "hello" ends with "llo"
+display "hello" starts with "xyz"
+
+-- Replace
+display "hello world" replaced "world" with "Babel"
+
+-- Character at
+display character 0 of "hello"
+display character 4 of "hello"
+
+-- Chaining
+display "hello world" in uppercase replaced "WORLD" with "BABEL"
+
+-- Interpolation with expressions
+x is 10
+y is 20
+display "The sum of {x} and {y} is {x + y}"
