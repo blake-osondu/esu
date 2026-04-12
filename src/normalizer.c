@@ -1060,7 +1060,11 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
                     strcmp(nv, "last") == 0 || strcmp(nv, "sum") == 0 ||
                     strcmp(nv, "product") == 0 || strcmp(nv, "difference") == 0 ||
                     strcmp(nv, "quotient") == 0 || strcmp(nv, "remainder") == 0 ||
-                    strcmp(nv, "result") == 0) {
+                    strcmp(nv, "result") == 0 || strcmp(nv, "home") == 0 ||
+                    strcmp(nv, "current") == 0 || strcmp(nv, "working") == 0 ||
+                    strcmp(nv, "temp") == 0 || strcmp(nv, "temporary") == 0 ||
+                    strcmp(nv, "desktop") == 0 || strcmp(nv, "downloads") == 0 ||
+                    strcmp(nv, "documents") == 0 || strcmp(nv, "contents") == 0) {
                     i++;
                     continue;
                 }

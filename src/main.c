@@ -238,6 +238,229 @@ static char *read_line(const char *prompt) {
     return buf;
 }
 
+/* Print an explanation of a Babel topic. topic may be NULL for the
+ * full guide, or a specific topic name. */
+static void print_explain(const char *topic) {
+    int all = (topic == NULL || *topic == '\0' ||
+               strcmp(topic, "all") == 0 || strcmp(topic, "everything") == 0);
+
+    if (all || strcmp(topic, "intro") == 0) {
+        printf("\n=== Welcome to Babel ===\n\n");
+        printf("Babel is a natural-language programming language. The same\n");
+        printf("operation can be written many ways — whichever reads best.\n");
+        printf("Lines end with a newline, a period (.), or a comma (,).\n");
+        printf("Blocks close with 'end' or a period (.).\n");
+        printf("Comments start with '--'.\n\n");
+        printf("Try these commands for specific topics:\n");
+        printf("  :explain basics       — variables, numbers, strings\n");
+        printf("  :explain math         — arithmetic and math builtins\n");
+        printf("  :explain logic        — comparisons and booleans\n");
+        printf("  :explain control      — if/else, while, for, loops\n");
+        printf("  :explain functions    — defining and calling functions\n");
+        printf("  :explain strings      — string operations\n");
+        printf("  :explain lists        — lists and iteration\n");
+        printf("  :explain maps         — maps / dictionaries\n");
+        printf("  :explain errors       — try/catch/raise\n");
+        printf("  :explain io           — input and output\n");
+        printf("  :explain sugar        — natural-language shortcuts\n");
+        printf("  :explain all          — show everything\n\n");
+        if (!all) return;
+    }
+
+    if (all || strcmp(topic, "basics") == 0) {
+        printf("\n--- Basics: variables and values ---\n\n");
+        printf("Babel has numbers, strings, booleans, lists, maps, and 'nothing'.\n");
+        printf("Variables are created with 'is', 'let ... be', 'set ... to', etc.\n\n");
+        printf("  x is 5\n");
+        printf("  let name be \"Alice\"\n");
+        printf("  set age to 30\n");
+        printf("  is_ready is true\n");
+        printf("  result is nothing\n\n");
+        printf("Reassign with the same syntax:\n");
+        printf("  x is 10\n");
+        printf("  x is now 20\n");
+        printf("  change x to 30\n\n");
+        printf("Or in post-assignment style (action first):\n");
+        printf("  5 + 10 then assign to total\n");
+        printf("  the sum of 3 and 4 and store in answer\n\n");
+    }
+
+    if (all || strcmp(topic, "math") == 0) {
+        printf("\n--- Math ---\n\n");
+        printf("Arithmetic works with symbols or words:\n");
+        printf("  display 5 + 3            (or 'plus')\n");
+        printf("  display 10 - 2           (or 'minus')\n");
+        printf("  display 4 * 5            (or 'times')\n");
+        printf("  display 20 / 4           (or 'divided by')\n");
+        printf("  display 17 modulo 5\n\n");
+        printf("Named operations:\n");
+        printf("  display the sum of 3 and 4\n");
+        printf("  display the product of 6 and 7\n");
+        printf("  display the difference of 10 and 3\n");
+        printf("  display the quotient of 20 and 4\n\n");
+        printf("Math builtins:\n");
+        printf("  display the absolute value of -7\n");
+        printf("  display the square root of 16\n");
+        printf("  display 2 to the power of 10\n");
+        printf("  display the floor of 3.7\n");
+        printf("  display 3.5 rounded\n");
+        printf("  display minimum of 5 and 10\n");
+        printf("  display random number between 1 and 100\n\n");
+    }
+
+    if (all || strcmp(topic, "logic") == 0) {
+        printf("\n--- Comparisons and booleans ---\n\n");
+        printf("Comparisons produce true/false:\n");
+        printf("  display x is greater than 5    (or x > 5)\n");
+        printf("  display x is less than 5\n");
+        printf("  display x equals 5             (or x == 5)\n");
+        printf("  display x is not equal to 5\n");
+        printf("  display x is at least 10\n");
+        printf("  display x is at most 100\n\n");
+        printf("Boolean logic:\n");
+        printf("  display x > 0 and x < 100\n");
+        printf("  display ready or finished\n");
+        printf("  display not is_empty\n\n");
+    }
+
+    if (all || strcmp(topic, "control") == 0) {
+        printf("\n--- Control flow ---\n\n");
+        printf("If/else:\n");
+        printf("  if x > 5 then\n");
+        printf("      display \"big\"\n");
+        printf("  otherwise\n");
+        printf("      display \"small\".\n\n");
+        printf("Alternative conditional words (all mean 'if'):\n");
+        printf("  when, whenever, suppose, assuming, given, in case, should\n\n");
+        printf("  when x is bigger than 5 then display \"big\".\n\n");
+        printf("While loop:\n");
+        printf("  while x < 10 do\n");
+        printf("      x is x + 1\n");
+        printf("  end\n\n");
+        printf("Also: 'as long as', 'repeat while', 'until', 'keep doing ... until'.\n\n");
+        printf("For loops:\n");
+        printf("  for i from 1 to 10 do\n");
+        printf("      display i\n");
+        printf("  end\n");
+        printf("  for item in list, display item.\n");
+        printf("  repeat 5 times, display \"hi\".\n");
+        printf("  count from 1 to 10 as i, display i.\n\n");
+    }
+
+    if (all || strcmp(topic, "functions") == 0) {
+        printf("\n--- Functions ---\n\n");
+        printf("Define functions many ways:\n");
+        printf("  function add taking a and b\n");
+        printf("      return a + b\n");
+        printf("  end\n\n");
+        printf("  to add with a and b\n");
+        printf("      return a + b.\n\n");
+        printf("  function square taking x, return x * x.\n\n");
+        printf("Call functions:\n");
+        printf("  display add(3, 4)\n");
+        printf("  display call add with 3 and 4\n");
+        printf("  display the result of calling add with 3 and 4\n\n");
+        printf("Verb conjugation — define once, use many forms:\n");
+        printf("  function double taking x, return x * 2.\n");
+        printf("  display 5 doubled         (past tense)\n");
+        printf("  display doubling 5        (gerund)\n");
+        printf("  display doubles 5         (third person)\n");
+        printf("  display 5 doubled tripled (chained, if triple defined)\n\n");
+        printf("Return sugar: 'give back', 'send back', 'respond with'\n\n");
+    }
+
+    if (all || strcmp(topic, "strings") == 0) {
+        printf("\n--- Strings ---\n\n");
+        printf("Interpolation with {expr} inside double-quoted strings:\n");
+        printf("  name is \"World\"\n");
+        printf("  display \"Hello, {name}!\"\n");
+        printf("  display \"2 + 3 = {2 + 3}\"\n\n");
+        printf("Operations:\n");
+        printf("  display length of \"hello\"\n");
+        printf("  display \"hello\" in uppercase\n");
+        printf("  display \"hello\" contains \"ell\"\n");
+        printf("  display \"hello\" starts with \"hel\"\n");
+        printf("  display first letter of \"hello\"\n");
+        printf("  display \"hi\" replaced \"i\" with \"ello\"\n\n");
+        printf("Possessive form:\n");
+        printf("  display name's length    (same as length of name)\n\n");
+    }
+
+    if (all || strcmp(topic, "lists") == 0) {
+        printf("\n--- Lists ---\n\n");
+        printf("Create:\n");
+        printf("  items is [1, 2, 3, 4, 5]\n");
+        printf("  names is a list of \"Alice\", \"Bob\", and \"Charlie\"\n\n");
+        printf("Access:\n");
+        printf("  display items[0]\n");
+        printf("  display the 1st item in items       (1-based)\n");
+        printf("  display item at index 2 in items\n");
+        printf("  display the first item of items\n");
+        printf("  display the last item of items\n\n");
+        printf("Modify:\n");
+        printf("  add 6 to items\n");
+        printf("  append 7 to items\n");
+        printf("  remove item 0 from items\n\n");
+        printf("Query:\n");
+        printf("  display length of items\n");
+        printf("  display the number of items in items\n");
+        printf("  display items contains 3\n");
+        printf("  display whether items contains 3\n");
+        printf("  display items between 1 and 3 of items    (slice)\n\n");
+        printf("Iterate:\n");
+        printf("  for item in items, display item.\n");
+        printf("  display every item in items\n\n");
+    }
+
+    if (all || strcmp(topic, "maps") == 0) {
+        printf("\n--- Maps / Dictionaries ---\n\n");
+        printf("Maps use string keys:\n");
+        printf("  person is {\"name\": \"Alice\", \"age\": 30}\n");
+        printf("  display person[\"name\"]\n");
+        printf("  display length of person       (number of entries)\n\n");
+    }
+
+    if (all || strcmp(topic, "errors") == 0) {
+        printf("\n--- Error handling ---\n\n");
+        printf("Basic try/catch:\n");
+        printf("  try\n");
+        printf("      raise \"something went wrong\"\n");
+        printf("  catch error\n");
+        printf("      display \"Got: {error}\".\n\n");
+        printf("Natural forms:\n");
+        printf("  try to\n");
+        printf("      DANGEROUS_THING\n");
+        printf("  but if it fails then\n");
+        printf("      HANDLE.\n\n");
+        printf("  attempt to THING catch error, display \"oops: {error}\".\n\n");
+        printf("Raise variants: 'raise', 'throw', 'fail with', 'report error'\n\n");
+    }
+
+    if (all || strcmp(topic, "io") == 0) {
+        printf("\n--- Input and output ---\n\n");
+        printf("Output:\n");
+        printf("  display \"hello\"   (also: print, show, say)\n\n");
+        printf("Input:\n");
+        printf("  name is input    (read a line from stdin)\n");
+        printf("  name is ask \"What's your name? \"\n");
+        printf("  name is input(\"What's your name? \")\n\n");
+    }
+
+    if (all || strcmp(topic, "sugar") == 0) {
+        printf("\n--- Natural-language sugar ---\n\n");
+        printf("Babel has dozens of ways to say the same thing:\n\n");
+        printf("  • Articles: 'the length of x' works the same as 'length of x'\n");
+        printf("  • Possessive: x's length = length of x\n");
+        printf("  • Types: type of x  =  the type of x  =  x's type\n");
+        printf("  • One-liners: combine statements with commas, end with period:\n");
+        printf("      to double with x, return x * 2.\n");
+        printf("      when x > 5, display \"big\", otherwise display \"small\".\n\n");
+        printf("  • Hyphenated names: function calculate-total taking items ...\n");
+        printf("  • Ordinals: 1st, 2nd, 3rd, 5th... usable in list access\n\n");
+        printf("There's no single \"right\" way — write what feels natural.\n\n");
+    }
+}
+
 static int run_repl(void) {
     const char *babel_dir = getenv("BABEL_HOME");
     if (!babel_dir) babel_dir = ".";
@@ -295,14 +518,22 @@ static int run_repl(void) {
             }
             if (strcmp(line, ":help") == 0 || strcmp(line, ":h") == 0) {
                 printf("REPL commands:\n");
-                printf("  :help, :h       Show this help\n");
-                printf("  :quit, :q       Exit REPL\n");
-                printf("  :clear, :c      Reset session (forget all definitions)\n");
-                printf("  :show           Print the full accumulated program\n");
+                printf("  :help, :h               Show this help\n");
+                printf("  :quit, :q               Exit REPL\n");
+                printf("  :clear, :c              Reset session (forget all definitions)\n");
+                printf("  :show                   Print the full accumulated program\n");
+                printf("  :explain [topic]        Babel language tutorial\n");
                 printf("\n");
                 printf("Multi-line input: start a block (if/while/function/try) and\n");
                 printf("the prompt changes to '..' until the block is closed with 'end' or '.'\n");
                 printf("\n");
+                free(line);
+                continue;
+            }
+            if (strncmp(line, ":explain", 8) == 0) {
+                const char *topic = line + 8;
+                while (*topic == ' ' || *topic == '\t') topic++;
+                print_explain(*topic ? topic : NULL);
                 free(line);
                 continue;
             }

@@ -10,6 +10,7 @@
 #include "babel_map.h"
 #include "babel_error.h"
 #include "babel_math.h"
+#include "babel_file.h"
 
 void babel_runtime_init(void);
 void babel_runtime_cleanup(void);

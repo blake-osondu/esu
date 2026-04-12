@@ -99,6 +99,7 @@ static ASTNode *parse_comparison(Parser *p);
 static ASTNode *parse_primary(Parser *p);
 static ASTNode *parse_postfix(Parser *p);
 static ASTNode *parse_unary(Parser *p);
+static ASTNode *parse_file_path(Parser *p);
 static int looks_like_past_tense(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static void parse_block(Parser *p, NodeList *list);
@@ -377,6 +378,173 @@ static ASTNode *parse_primary(Parser *p) {
         ASTNode **args = malloc(sizeof(ASTNode *));
         args[0] = prompt;
         return make_builtin_call("__input", args, 1, t->line, t->col);
+    }
+
+    /* --- Directory builtins (no args) --- */
+    /* "home directory" / "home folder" → __home_dir() */
+    if (check_word(p, "home") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "directory") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "folder") == 0)) {
+        Token *t = advance_parser(p); advance_parser(p);
+        return make_builtin_call("__home_dir", NULL, 0, t->line, t->col);
+    }
+    /* "current directory" / "current folder" / "working directory" */
+    if ((check_word(p, "current") || check_word(p, "working")) &&
+        p->pos + 1 < p->count && p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "directory") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "folder") == 0)) {
+        Token *t = advance_parser(p); advance_parser(p);
+        return make_builtin_call("__current_dir", NULL, 0, t->line, t->col);
+    }
+    /* "temp directory" / "temp folder" / "temporary directory" */
+    if ((check_word(p, "temp") || check_word(p, "temporary")) &&
+        p->pos + 1 < p->count && p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "directory") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "folder") == 0)) {
+        Token *t = advance_parser(p); advance_parser(p);
+        return make_builtin_call("__temp_dir", NULL, 0, t->line, t->col);
+    }
+    /* "desktop folder" / "desktop directory" / "desktop" (if not variable) */
+    if (check_word(p, "desktop") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "directory") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "folder") == 0)) {
+        Token *t = advance_parser(p); advance_parser(p);
+        return make_builtin_call("__desktop_dir", NULL, 0, t->line, t->col);
+    }
+    /* "downloads folder" */
+    if (check_word(p, "downloads") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "directory") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "folder") == 0)) {
+        Token *t = advance_parser(p); advance_parser(p);
+        return make_builtin_call("__downloads_dir", NULL, 0, t->line, t->col);
+    }
+    /* "documents folder" */
+    if (check_word(p, "documents") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "directory") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "folder") == 0)) {
+        Token *t = advance_parser(p); advance_parser(p);
+        return make_builtin_call("__documents_dir", NULL, 0, t->line, t->col);
+    }
+
+    /* --- File operations (prefix) ---
+     * Supports many natural phrasings:
+     *   read file X           read from file X       read the file X
+     *   read lines from X     read all lines from X  read all lines in file X
+     *   contents of file X    contents of the file X
+     *   lines of file X       lines in file X        lines from file X
+     */
+
+    /* "read [all] lines [from/of/in] [file] EXPR" — must check BEFORE "read file" */
+    if (check_word(p, "read") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        int matched_lines = 0;
+        advance_parser(p); /* consume "read" */
+        /* optional "all" */
+        if (check_word(p, "all")) advance_parser(p);
+        if (check_word(p, "lines")) {
+            advance_parser(p);
+            matched_lines = 1;
+            /* optional "from"/"of"/"in" */
+            if (check_word(p, "from") || check_word(p, "of") || check_word(p, "in")) {
+                advance_parser(p);
+            }
+            /* optional "the" */
+            if (check_word(p, "the")) advance_parser(p);
+            /* optional "file" */
+            if (check_word(p, "file")) advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = parse_file_path(p);
+            Token t_tok = p->tokens[saved];
+            return make_builtin_call("__file_lines", args, 1, t_tok.line, t_tok.col);
+        }
+        if (!matched_lines) p->pos = saved;
+    }
+
+    /* "read [from] [the] file EXPR" / "read [from] EXPR" */
+    if (check_word(p, "read") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        (strcmp(p->tokens[p->pos + 1].value, "file") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "from") == 0 ||
+         strcmp(p->tokens[p->pos + 1].value, "the") == 0)) {
+        Token *t = advance_parser(p); /* consume "read" */
+        /* Skip optional "from" */
+        if (check_word(p, "from")) advance_parser(p);
+        /* Skip optional "the" */
+        if (check_word(p, "the")) advance_parser(p);
+        /* Skip optional "file" */
+        if (check_word(p, "file")) advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_file_path(p);
+        return make_builtin_call("__file_read", args, 1, t->line, t->col);
+    }
+
+    /* "contents of [the] [file] EXPR" → __file_read(EXPR) */
+    if (check_two_words(p, "contents", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "file")) advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_file_path(p);
+        return make_builtin_call("__file_read", args, 1, t->line, t->col);
+    }
+
+    /* "[all] lines of/from/in [the] [file] EXPR" */
+    if ((check_word(p, "lines") || check_two_words(p, "all", "lines")) &&
+        p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token t_tok = p->tokens[saved];
+        if (check_word(p, "all")) advance_parser(p);
+        advance_parser(p); /* consume "lines" */
+        if (check_word(p, "of") || check_word(p, "from") || check_word(p, "in")) {
+            advance_parser(p);
+            if (check_word(p, "the")) advance_parser(p);
+            if (check_word(p, "file")) advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = parse_file_path(p);
+            return make_builtin_call("__file_lines", args, 1, t_tok.line, t_tok.col);
+        }
+        /* Not a lines-of-file pattern, restore */
+        p->pos = saved;
+    }
+
+    /* "file EXPR exists" — needs to be an expression. We'll rearrange here:
+     * Actually, we want "X exists" as postfix since "file EXPR" can be a
+     * compound term. Let's handle "does file EXPR exist" as prefix: */
+    if (check_word(p, "does") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "file") == 0) {
+        Token *t = advance_parser(p); advance_parser(p); /* does file */
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        ASTNode *path = parse_file_path(p);
+        /* optional "exist" */
+        if (check_word(p, "exist") || check_word(p, "exists")) advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = path;
+        return make_builtin_call("__file_exists", args, 1, t->line, t->col);
+    }
+
+    /* "file EXPR exists" — prefix form that reads natural */
+    if (check_word(p, "file") && p->pos + 1 < p->count) {
+        /* Peek for the pattern: file STR_OR_IDENT ... exists */
+        int saved = p->pos;
+        advance_parser(p);
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        if (check_type(p, TOK_STRING) || check_type(p, TOK_WORD)) {
+            ASTNode *path = parse_file_path(p);
+            if (check_word(p, "exists")) {
+                Token *t = advance_parser(p);
+                ASTNode **args = malloc(sizeof(ASTNode *));
+                args[0] = path;
+                return make_builtin_call("__file_exists", args, 1, t->line, t->col);
+            }
+            /* Not "file X exists" — restore */
+            ast_free(path);
+        }
+        p->pos = saved;
     }
 
     /* --- Math builtins --- */
@@ -1261,6 +1429,62 @@ static char *str_dup_parser(const char *s) {
     return d;
 }
 
+/* Parse a file path expression, with optional directory suffix:
+ *   EXPR                              → EXPR
+ *   EXPR at DIR                       → DIR + "/" + EXPR
+ *   EXPR in [the] directory DIR       → DIR + "/" + EXPR
+ *   EXPR in [the] folder DIR          → DIR + "/" + EXPR
+ *   EXPR in DIR                       → DIR + "/" + EXPR (if DIR starts with /, ./, or ~)
+ * Returns a path expression (possibly a binary concat expression). */
+static ASTNode *parse_file_path(Parser *p) {
+    ASTNode *filename = parse_comparison(p);
+
+    /* Check for directory suffix */
+    if (check_word(p, "at")) {
+        Token *at_tok = advance_parser(p);
+        /* optional "the" */
+        if (check_word(p, "the")) advance_parser(p);
+        /* optional "directory"/"folder"/"path" */
+        if (check_word(p, "directory") || check_word(p, "folder") ||
+            check_word(p, "path")) advance_parser(p);
+        ASTNode *dir = parse_comparison(p);
+        /* Build: dir + "/" + filename */
+        ASTNode *slash = ast_string_lit("/", at_tok->line, at_tok->col);
+        ASTNode *dir_slash = ast_binary(dir, "+", slash, at_tok->line, at_tok->col);
+        return ast_binary(dir_slash, "+", filename, at_tok->line, at_tok->col);
+    }
+
+    if (check_word(p, "in") && p->pos + 1 < p->count) {
+        /* Only consume "in" if followed by "the directory/folder" or just
+         * "directory/folder" — otherwise "in" could mean something else */
+        int peek = p->pos + 1;
+        int is_dir_phrase = 0;
+        if (peek < p->count && p->tokens[peek].type == TOK_WORD) {
+            const char *w1 = p->tokens[peek].value;
+            if (strcmp(w1, "directory") == 0 || strcmp(w1, "folder") == 0) {
+                is_dir_phrase = 1;
+            } else if (strcmp(w1, "the") == 0 && peek + 1 < p->count &&
+                       p->tokens[peek + 1].type == TOK_WORD) {
+                const char *w2 = p->tokens[peek + 1].value;
+                if (strcmp(w2, "directory") == 0 || strcmp(w2, "folder") == 0) {
+                    is_dir_phrase = 1;
+                }
+            }
+        }
+        if (is_dir_phrase) {
+            Token *in_tok = advance_parser(p); /* consume "in" */
+            if (check_word(p, "the")) advance_parser(p);
+            advance_parser(p); /* consume directory/folder */
+            ASTNode *dir = parse_comparison(p);
+            ASTNode *slash = ast_string_lit("/", in_tok->line, in_tok->col);
+            ASTNode *dir_slash = ast_binary(dir, "+", slash, in_tok->line, in_tok->col);
+            return ast_binary(dir_slash, "+", filename, in_tok->line, in_tok->col);
+        }
+    }
+
+    return filename;
+}
+
 static ASTNode *parse_for_stmt(Parser *p) {
     Token *tok = advance_parser(p); /* consume 'for' */
 
@@ -1501,11 +1725,19 @@ static ASTNode *parse_statement(Parser *p) {
         p->pos = saved; /* restore */
     }
 
-    /* "append EXPR to EXPR" */
+    /* "append EXPR to [file] EXPR" */
     if (check_word(p, "append")) {
         Token *t = advance_parser(p);
         ASTNode *item = parse_comparison(p);
         expect_word(p, "to", "expected 'to' in 'append X to Y'");
+        /* If followed by "file", use file append; otherwise list append */
+        if (check_word(p, "file")) {
+            advance_parser(p); /* consume "file" */
+            ASTNode *path = parse_file_path(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = path; args[1] = item;
+            return make_builtin_call("__file_append", args, 2, t->line, t->col);
+        }
         ASTNode *list = parse_postfix(p);
         ASTNode **args = malloc(sizeof(ASTNode *) * 2);
         args[0] = list; args[1] = item;
@@ -1522,6 +1754,135 @@ static ASTNode *parse_statement(Parser *p) {
         ASTNode **args = malloc(sizeof(ASTNode *) * 2);
         args[0] = list; args[1] = idx;
         return make_builtin_call("__list_remove", args, 2, t->line, t->col);
+    }
+
+    /* --- File operations (statement-level actions) --- */
+    /* "write EXPR to [the] [file] EXPR [at/in DIR]" */
+    if (check_word(p, "write")) {
+        Token *t = advance_parser(p);
+        ASTNode *content = parse_comparison(p);
+        expect_word(p, "to", "expected 'to' in 'write X to Y'");
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "file")) advance_parser(p);
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        ASTNode *path = parse_file_path(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = path; args[1] = content;
+        return make_builtin_call("__file_write", args, 2, t->line, t->col);
+    }
+
+    /* "save EXPR to [the] [file] EXPR [at/in DIR]" (alias for write) */
+    if (check_word(p, "save") && p->pos + 1 < p->count) {
+        Token *t = advance_parser(p);
+        ASTNode *content = parse_comparison(p);
+        expect_word(p, "to", "expected 'to' in 'save X to Y'");
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "file")) advance_parser(p);
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        ASTNode *path = parse_file_path(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = path; args[1] = content;
+        return make_builtin_call("__file_write", args, 2, t->line, t->col);
+    }
+
+    /* "delete [the] file [named] EXPR [at/in DIR]" / "remove [the] file [named] EXPR" */
+    if ((check_word(p, "delete") || check_two_words(p, "remove", "file")) &&
+        p->pos + 1 < p->count) {
+        Token *t = advance_parser(p);
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "file")) advance_parser(p);
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        ASTNode *path = parse_file_path(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = path;
+        return make_builtin_call("__file_delete", args, 1, t->line, t->col);
+    }
+
+    /* "create [a] [new] file [named] EXPR" / "make [a] [new] file [named] EXPR"
+     * / "create [a] [new] file EXPR" — creates an empty file.
+     * Also handles "touch file EXPR" for idempotent create. */
+    if ((check_word(p, "create") || check_word(p, "make") || check_word(p, "touch")) &&
+        p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* consume create/make/touch */
+        /* optional "a" / "an" / "the" */
+        if (check_word(p, "a") || check_word(p, "an") || check_word(p, "the")) advance_parser(p);
+        /* optional "new" */
+        if (check_word(p, "new")) advance_parser(p);
+        /* Require "file" keyword for disambiguation */
+        if (!check_word(p, "file")) {
+            /* Not a file creation — restore and fall through */
+            p->pos = saved;
+        } else {
+            advance_parser(p); /* consume "file" */
+            /* optional "named" / "called" */
+            if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+            ASTNode *path = parse_file_path(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = path;
+            /* "touch" uses __file_touch (no error if exists); create/make uses __file_create */
+            const char *fn = (strcmp(t->value, "touch") == 0) ?
+                             "__file_touch" : "__file_create";
+            return make_builtin_call(fn, args, 1, t->line, t->col);
+        }
+    }
+
+    /* "move [the] file [named] EXPR [at/in DIR] to [the] [file] Y [at/in DIR]"
+     * Also supports "move file from X to Y" form */
+    if ((check_word(p, "move") || check_word(p, "rename")) && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* consume move/rename */
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "file")) advance_parser(p);
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        ASTNode *from = parse_file_path(p);
+        /* Support "move file from X to Y" — if we see "from", discard and reparse */
+        if (check_word(p, "from")) {
+            ast_free(from);
+            advance_parser(p); /* consume "from" */
+            from = parse_file_path(p);
+        }
+        if (!check_word(p, "to")) {
+            ast_free(from);
+            p->pos = saved;
+        } else {
+            advance_parser(p); /* consume "to" */
+            if (check_word(p, "the")) advance_parser(p);
+            if (check_word(p, "file")) advance_parser(p);
+            if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+            ASTNode *to = parse_file_path(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = from; args[1] = to;
+            return make_builtin_call("__file_move", args, 2, t->line, t->col);
+        }
+    }
+
+    /* "copy [the] file [named] X [at/in DIR] to Y [at/in DIR]" */
+    if (check_word(p, "copy") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "file")) advance_parser(p);
+        if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+        ASTNode *from = parse_file_path(p);
+        if (check_word(p, "from")) {
+            ast_free(from);
+            advance_parser(p);
+            from = parse_file_path(p);
+        }
+        if (!check_word(p, "to")) {
+            ast_free(from);
+            p->pos = saved;
+        } else {
+            advance_parser(p); /* consume "to" */
+            if (check_word(p, "the")) advance_parser(p);
+            if (check_word(p, "file")) advance_parser(p);
+            if (check_word(p, "named") || check_word(p, "called")) advance_parser(p);
+            ASTNode *to = parse_file_path(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = from; args[1] = to;
+            return make_builtin_call("__file_copy", args, 2, t->line, t->col);
+        }
     }
 
     /* Try/catch: try ... catch ERROR ... end */

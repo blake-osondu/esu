@@ -1,0 +1,39 @@
+-- Write a file
+write "Hello from Babel!" to file "/tmp/babel_test.txt"
+
+-- Check it exists
+display does file "/tmp/babel_test.txt" exist
+display file "/tmp/babel_test.txt" exists
+
+-- Read the contents
+display read file "/tmp/babel_test.txt"
+display contents of file "/tmp/babel_test.txt"
+
+-- Append to it
+append "\nMore text!" to file "/tmp/babel_test.txt"
+display read from "/tmp/babel_test.txt"
+
+-- Read as lines
+names is a list of "Alice", "Bob", "Charlie"
+write "" to file "/tmp/names.txt"
+for name in names, append "{name}\n" to file "/tmp/names.txt".
+
+display lines of file "/tmp/names.txt"
+display length of lines from file "/tmp/names.txt"
+
+-- Iterate over file lines
+for line in lines of file "/tmp/names.txt"
+    display "Got: {line}".
+
+-- Error handling: missing file
+try
+    display read file "/nonexistent/file.txt"
+catch error
+    display "Error: {error}".
+
+-- Cleanup
+delete file "/tmp/babel_test.txt"
+delete file "/tmp/names.txt"
+
+display "Deleted test files"
+display does file "/tmp/babel_test.txt" exist
