@@ -34,8 +34,17 @@ add_executable(babel
     src/codegen.c
     src/error.c
     src/util.c
+    third_party/linenoise/linenoise.c
 )
-target_include_directories(babel PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(babel PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/third_party/linenoise
+)
+
+# Suppress pedantic warnings only for third-party linenoise
+set_source_files_properties(third_party/linenoise/linenoise.c
+    PROPERTIES COMPILE_FLAGS "-Wno-variadic-macro-arguments-omitted"
+)
 
 # Install the runtime headers/lib so compiled programs can link against it
 install(TARGETS babel_runtime ARCHIVE DESTINATION lib)

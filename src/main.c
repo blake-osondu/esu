@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <unistd.h>
 #include "lexer.h"
 #include "normalizer.h"
 #include "parser.h"
@@ -9,6 +10,7 @@
 #include "codegen.h"
 #include "util.h"
 #include "error.h"
+#include "linenoise.h"
 
 static void usage(const char *prog) {
     fprintf(stderr, "Usage:\n");
@@ -201,8 +203,23 @@ static int needs_more_input(const char *source) {
     return depth;
 }
 
-/* Read a single line from stdin. Returns malloc'd string, NULL on EOF. */
+/* Read a single line using linenoise (arrow keys, history, line editing).
+ * Falls back to getchar when input is not a TTY (piped input for testing).
+ * Returns malloc'd string, NULL on EOF. */
 static char *read_line(const char *prompt) {
+    /* Use linenoise when stdin is a terminal */
+    if (isatty(fileno(stdin))) {
+        char *ln = linenoise(prompt);
+        if (!ln) return NULL;
+        if (*ln) linenoiseHistoryAdd(ln);
+        /* Copy to malloc memory so caller can free() with stdlib free */
+        int len = strlen(ln);
+        char *buf = malloc(len + 1);
+        memcpy(buf, ln, len + 1);
+        linenoiseFree(ln);
+        return buf;
+    }
+    /* Non-interactive fallback: simple getchar loop */
     printf("%s", prompt);
     fflush(stdout);
     int cap = 256;
@@ -224,6 +241,19 @@ static char *read_line(const char *prompt) {
 static int run_repl(void) {
     const char *babel_dir = getenv("BABEL_HOME");
     if (!babel_dir) babel_dir = ".";
+
+    /* Load history from ~/.babel_history if available */
+    const char *home = getenv("HOME");
+    char history_path[1024];
+    if (home) {
+        snprintf(history_path, sizeof(history_path), "%s/.babel_history", home);
+        linenoiseHistoryLoad(history_path);
+    } else {
+        history_path[0] = '\0';
+    }
+    linenoiseHistorySetMaxLen(1000);
+    /* Allow multi-line editing within a single linenoise call */
+    linenoiseSetMultiLine(1);
 
     printf("Babel REPL — type :help for commands, :quit to exit\n");
     printf("\n");
@@ -410,6 +440,8 @@ static int run_repl(void) {
         input_buf[0] = '\0';
         input_len = 0;
     }
+
+    if (history_path[0]) linenoiseHistorySave(history_path);
 
     free(accumulated);
     free(prev_output);
