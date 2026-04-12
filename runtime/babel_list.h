@@ -15,6 +15,7 @@ BabelValue *babel_list_first(BabelValue *list);
 BabelValue *babel_list_last(BabelValue *list);
 BabelValue *babel_list_is_empty(BabelValue *list);
 BabelValue *babel_list_joined(BabelValue *list, BabelValue *separator);
+BabelValue *babel_list_slice(BabelValue *list, BabelValue *start, BabelValue *end);
 
 /* Index expression: works for both lists and strings */
 BabelValue *babel_index(BabelValue *collection, BabelValue *index);

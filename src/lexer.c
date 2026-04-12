@@ -320,6 +320,12 @@ Token lexer_next(Lexer *lex) {
         return lex_string(lex);
     }
 
+    /* Possessive marker: 's after a word or string */
+    if (c == '\'' && peek_next(lex) == 's') {
+        advance(lex); advance(lex); /* consume 's */
+        return make_token(TOK_WORD, "__poss", line, col);
+    }
+
     /* Two-character operators */
     char next = peek_next(lex);
     if (c == '=' && next == '=') { advance(lex); advance(lex); return make_token(TOK_EQ, "==", line, col); }

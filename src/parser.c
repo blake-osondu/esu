@@ -76,6 +76,7 @@ static int is_block_end(Parser *p) {
     if (check_type(p, TOK_DOT)) return 1;  /* period terminates blocks */
     if (check_word(p, "else")) return 1;
     if (check_word(p, "until")) return 1;
+    if (check_word(p, "catch")) return 1;
     return 0;
 }
 
@@ -97,6 +98,7 @@ static ASTNode *parse_expression(Parser *p);
 static ASTNode *parse_comparison(Parser *p);
 static ASTNode *parse_primary(Parser *p);
 static ASTNode *parse_postfix(Parser *p);
+static ASTNode *parse_unary(Parser *p);
 static int looks_like_past_tense(Parser *p);
 static ASTNode *parse_statement(Parser *p);
 static void parse_block(Parser *p, NodeList *list);
@@ -165,6 +167,33 @@ static ASTNode *parse_primary(Parser *p) {
         ASTNode **args = malloc(sizeof(ASTNode *));
         args[0] = arg;
         return make_builtin_call("__length", args, 1, t->line, t->col);
+    }
+
+    /* "items between X and Y in/of LIST" → slice(LIST, X, Y+1)
+     * Also handles "items between Xth and Yth index of LIST" */
+    if ((check_word(p, "items") || check_word(p, "elements")) &&
+        p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "between") == 0) {
+        Token *t = advance_parser(p); /* consume "items" */
+        advance_parser(p); /* consume "between" */
+        ASTNode *start = parse_primary(p);
+        /* Skip "index"/"indices"/"position" if present */
+        if (check_word(p, "index") || check_word(p, "indices") ||
+            check_word(p, "position")) advance_parser(p);
+        expect_word(p, "and", "expected 'and' in 'items between X and Y'");
+        ASTNode *end_node = parse_primary(p);
+        if (check_word(p, "index") || check_word(p, "indices") ||
+            check_word(p, "position") || check_word(p, "positions")) advance_parser(p);
+        if (check_word(p, "in") || check_word(p, "of")) advance_parser(p);
+        ASTNode *list = parse_postfix(p);
+        /* Slice is exclusive on end, but "between X and Y" is inclusive in English.
+         * We add 1 to the end index: slice(list, start, end+1) */
+        ASTNode *end_plus_one = ast_binary(end_node, "+",
+            ast_number_lit(1, t->line, t->col), t->line, t->col);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+        args[0] = list; args[1] = start; args[2] = end_plus_one;
+        return make_builtin_call("__list_slice", args, 3, t->line, t->col);
     }
 
     /* "item at index N in X" / "element at index N in X" → __index(X, N) */
@@ -350,6 +379,115 @@ static ASTNode *parse_primary(Parser *p) {
         return make_builtin_call("__input", args, 1, t->line, t->col);
     }
 
+    /* --- Math builtins --- */
+    /* Single-arg: "absolute value of X", "square root of X", "floor of X", etc. */
+    if (check_word(p, "absolute") && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "value") == 0 &&
+        p->tokens[p->pos + 2].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 2].value, "of") == 0) {
+        Token *t = advance_parser(p); advance_parser(p); advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_unary(p);
+        return make_builtin_call("__abs", args, 1, t->line, t->col);
+    }
+    if (check_word(p, "square") && check_two_words(p, "square", "root")) {
+        Token *t = advance_parser(p); advance_parser(p); /* consume "square root" */
+        if (check_word(p, "of")) advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_postfix(p);
+        return make_builtin_call("__sqrt_val", args, 1, t->line, t->col);
+    }
+    /* "floor of X" / "ceiling of X" / "round X" */
+    if (check_two_words(p, "floor", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_postfix(p);
+        return make_builtin_call("__floor_val", args, 1, t->line, t->col);
+    }
+    if (check_two_words(p, "ceiling", "of") || check_two_words(p, "ceil", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_postfix(p);
+        return make_builtin_call("__ceil_val", args, 1, t->line, t->col);
+    }
+    /* "X raised to the power of Y" is handled in postfix */
+    /* "X to the power of Y" — also postfix */
+
+    /* "random number" / "random number between X and Y" */
+    if (check_word(p, "random")) {
+        Token *t = advance_parser(p);
+        if (check_word(p, "number")) advance_parser(p); /* optional "number" */
+        if (check_word(p, "between")) {
+            advance_parser(p);
+            ASTNode *lo = parse_comparison(p);
+            expect_word(p, "and", "expected 'and' in 'random between X and Y'");
+            ASTNode *hi = parse_comparison(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = lo; args[1] = hi;
+            return make_builtin_call("__random_between", args, 2, t->line, t->col);
+        }
+        return make_builtin_call("__random_val", NULL, 0, t->line, t->col);
+    }
+
+    /* "minimum of X and Y" / "maximum of X and Y" */
+    if (check_two_words(p, "minimum", "of") || check_two_words(p, "min", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        ASTNode *a = parse_comparison(p);
+        expect_word(p, "and", "expected 'and' in 'minimum of X and Y'");
+        ASTNode *b = parse_comparison(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = a; args[1] = b;
+        return make_builtin_call("__min_val", args, 2, t->line, t->col);
+    }
+    if (check_two_words(p, "maximum", "of") || check_two_words(p, "max", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        ASTNode *a = parse_comparison(p);
+        expect_word(p, "and", "expected 'and' in 'maximum of X and Y'");
+        ASTNode *b = parse_comparison(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = a; args[1] = b;
+        return make_builtin_call("__max_val", args, 2, t->line, t->col);
+    }
+
+    /* --- Type operations --- */
+    /* "type of X" → __type_of(X) */
+    if (check_two_words(p, "type", "of")) {
+        Token *t = advance_parser(p); advance_parser(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = parse_postfix(p);
+        return make_builtin_call("__type_of", args, 1, t->line, t->col);
+    }
+    /* "convert X to string/number" or "X as a string/number" (postfix handled below) */
+    /* "convert X to TYPE" / "conversion of X to/as a TYPE" */
+    if (check_word(p, "convert") || check_two_words(p, "conversion", "of")) {
+        Token *t = advance_parser(p);
+        if (check_word(p, "of")) advance_parser(p); /* "conversion of" */
+        /* Use parse_primary (not parse_postfix) so "as a number" stays
+         * for the conversion keyword to consume */
+        ASTNode *val = parse_primary(p);
+        /* Accept "to" or "as" (with optional "a"/"an") */
+        if (check_word(p, "to") || check_word(p, "as")) {
+            advance_parser(p);
+        } else {
+            babel_error_at_token(current(p), "expected 'to' or 'as' in conversion");
+        }
+        if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
+        if (check_word(p, "string") || check_word(p, "text")) {
+            advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = val;
+            return make_builtin_call("__to_string_val", args, 1, t->line, t->col);
+        }
+        if (check_word(p, "number")) {
+            advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = val;
+            return make_builtin_call("__to_number_val", args, 1, t->line, t->col);
+        }
+        babel_error_at_token(current(p), "expected 'string' or 'number' after conversion");
+    }
+
     /* Named math operations: "the sum of X and Y" → X + Y
      * "the" is stripped by normalizer in mid-expression, so we check for
      * "sum of", "product of", "difference of", "quotient of" */
@@ -485,6 +623,22 @@ static ASTNode *parse_primary(Parser *p) {
         return ast_number_lit(atof(tok->value), tok->line, tok->col);
     }
 
+    /* Bare ordinal word: "2nd", "5th" → number (1-based, but used directly
+     * as 0-based when in slice context handled by caller) */
+    if (tok->type == TOK_WORD) {
+        const char *w = tok->value;
+        int wlen = strlen(w);
+        if (wlen >= 3 && isdigit(w[0]) &&
+            (strcmp(w + wlen - 2, "st") == 0 ||
+             strcmp(w + wlen - 2, "nd") == 0 ||
+             strcmp(w + wlen - 2, "rd") == 0 ||
+             strcmp(w + wlen - 2, "th") == 0)) {
+            /* Return N-1 for 0-based indexing compatibility */
+            advance_parser(p);
+            return ast_number_lit(atoi(w) - 1, tok->line, tok->col);
+        }
+    }
+
     if (tok->type == TOK_STRING) {
         advance_parser(p);
         return ast_string_lit(tok->value, tok->line, tok->col);
@@ -578,7 +732,8 @@ static int looks_like_past_tense(Parser *p) {
     if (strcmp(w, "continued") == 0 || strcmp(w, "returned") == 0 ||
         strcmp(w, "called") == 0 || strcmp(w, "displayed") == 0 ||
         strcmp(w, "replaced") == 0 || strcmp(w, "uppercased") == 0 ||
-        strcmp(w, "lowercased") == 0 || strcmp(w, "trimmed") == 0) return 0;
+        strcmp(w, "lowercased") == 0 || strcmp(w, "trimmed") == 0 ||
+        strcmp(w, "rounded") == 0) return 0;
     if (len > 3 && strcmp(w + len - 3, "ied") == 0) return 1;
     if (len > 2 && strcmp(w + len - 2, "ed") == 0) return 1;
     return 0;
@@ -597,7 +752,10 @@ static int looks_like_prefix_verb(Parser *p) {
         strcmp(w, "nothing") == 0 || strcmp(w, "this") == 0 ||
         strcmp(w, "replacing") == 0 || strcmp(w, "begins") == 0 ||
         strcmp(w, "starts") == 0 || strcmp(w, "ends") == 0 ||
-        strcmp(w, "contains") == 0 || strcmp(w, "has") == 0) return 0;
+        strcmp(w, "contains") == 0 || strcmp(w, "has") == 0 ||
+        strcmp(w, "ceiling") == 0 || strcmp(w, "nothing") == 0 ||
+        strcmp(w, "string") == 0 || strcmp(w, "minimum") == 0 ||
+        strcmp(w, "maximum") == 0) return 0;
     if (len > 4 && strcmp(w + len - 4, "ying") == 0) return 1;
     if (len > 3 && strcmp(w + len - 3, "ing") == 0) return 1;
     /* -s/-es/-ies only when next token is a literal value (number, string, paren)
@@ -824,6 +982,64 @@ static ASTNode *parse_postfix(Parser *p) {
             ASTNode **args = malloc(sizeof(ASTNode *));
             args[0] = expr;
             expr = make_builtin_call("__trim", args, 1, t->line, t->col);
+            continue;
+        }
+        /* "x rounded" / "x rounded down" / "x rounded up" */
+        if (check_word(p, "rounded")) {
+            Token *t = advance_parser(p);
+            const char *func = "__round_val";
+            if (check_word(p, "down")) { advance_parser(p); func = "__floor_val"; }
+            else if (check_word(p, "up")) { advance_parser(p); func = "__ceil_val"; }
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = make_builtin_call(func, args, 1, t->line, t->col);
+            continue;
+        }
+        /* "x as a string" / "x as a number" / "x as text" */
+        if (check_word(p, "as")) {
+            int peek = p->pos + 1;
+            /* skip optional "a"/"an" */
+            if (peek < p->count && p->tokens[peek].type == TOK_WORD &&
+                (strcmp(p->tokens[peek].value, "a") == 0 ||
+                 strcmp(p->tokens[peek].value, "an") == 0)) peek++;
+            if (peek < p->count && p->tokens[peek].type == TOK_WORD) {
+                const char *type_name = p->tokens[peek].value;
+                if (strcmp(type_name, "string") == 0 || strcmp(type_name, "text") == 0) {
+                    Token *t = advance_parser(p); /* consume "as" */
+                    if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
+                    advance_parser(p); /* consume "string"/"text" */
+                    ASTNode **args = malloc(sizeof(ASTNode *));
+                    args[0] = expr;
+                    expr = make_builtin_call("__to_string_val", args, 1, t->line, t->col);
+                    continue;
+                }
+                if (strcmp(type_name, "number") == 0) {
+                    Token *t = advance_parser(p);
+                    if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
+                    advance_parser(p);
+                    ASTNode **args = malloc(sizeof(ASTNode *));
+                    args[0] = expr;
+                    expr = make_builtin_call("__to_number_val", args, 1, t->line, t->col);
+                    continue;
+                }
+            }
+        }
+        /* "x to the power of y" / "x raised to y" */
+        if (check_word(p, "to") && p->pos + 2 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD &&
+            (strcmp(p->tokens[p->pos + 1].value, "power") == 0 ||
+             (strcmp(p->tokens[p->pos + 1].value, "the") == 0 &&
+              p->pos + 3 < p->count &&
+              p->tokens[p->pos + 2].type == TOK_WORD &&
+              strcmp(p->tokens[p->pos + 2].value, "power") == 0))) {
+            Token *t = advance_parser(p); /* consume "to" */
+            if (check_word(p, "the")) advance_parser(p);
+            advance_parser(p); /* consume "power" */
+            if (check_word(p, "of")) advance_parser(p);
+            ASTNode *exp = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = expr; args[1] = exp;
+            expr = make_builtin_call("__power", args, 2, t->line, t->col);
             continue;
         }
         break;
@@ -1306,6 +1522,44 @@ static ASTNode *parse_statement(Parser *p) {
         ASTNode **args = malloc(sizeof(ASTNode *) * 2);
         args[0] = list; args[1] = idx;
         return make_builtin_call("__list_remove", args, 2, t->line, t->col);
+    }
+
+    /* Try/catch: try ... catch ERROR ... end */
+    if (check_word(p, "try")) {
+        Token *t = advance_parser(p);
+        skip_separators(p);
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_TRY_STMT;
+        node->line = t->line;
+        node->col = t->col;
+        parse_block(p, &node->as.try_stmt.body);
+        expect_word(p, "catch", "expected 'catch' after try block");
+        /* Optional error variable name */
+        if (check_type(p, TOK_WORD) && !check_word(p, "end") &&
+            !is_separator(p) && !check_type(p, TOK_DOT)) {
+            Token *err_var = advance_parser(p);
+            node->as.try_stmt.error_var = str_dup_parser(err_var->value);
+        } else {
+            node->as.try_stmt.error_var = str_dup_parser("error");
+        }
+        skip_separators(p);
+        parse_block(p, &node->as.try_stmt.catch_body);
+        expect_block_end(p, "try/catch");
+        return node;
+    }
+
+    /* Raise/throw: raise EXPR */
+    if (check_word(p, "raise") || check_word(p, "throw")) {
+        Token *t = advance_parser(p);
+        /* optional "error" noise word */
+        if (check_word(p, "error")) advance_parser(p);
+        ASTNode *value = parse_expression(p);
+        ASTNode *node = calloc(1, sizeof(ASTNode));
+        node->type = NODE_RAISE_STMT;
+        node->line = t->line;
+        node->col = t->col;
+        node->as.raise_stmt.value = value;
+        return node;
     }
 
     /* Function definition */

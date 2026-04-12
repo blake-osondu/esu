@@ -1,0 +1,50 @@
+-- === Math builtins ===
+display absolute value of -42
+display square root of 16
+display floor of 3.7
+display ceiling of 3.2
+display 3.5 rounded
+display 3.7 rounded down
+display 3.2 rounded up
+
+-- Power
+display 2 to the power of 10
+display 3 to power of 3
+
+-- Min/max
+display minimum of 5 and 10
+display maximum of 5 and 10
+
+-- Random (just check it doesn't crash)
+r is random number between 1 and 100
+display whether r is at least 1
+display whether r is at most 100
+
+-- === Type operations ===
+display type of 42
+display type of "hello"
+display type of true
+display type of [1, 2, 3]
+display type of nothing
+
+-- Type conversion
+display "42" as a number
+display 42 as a string
+display convert "3.14" to number
+display convert 100 to string
+display convert true to a string
+
+-- === Error handling ===
+try
+    display "Trying division by zero..."
+    x is 10 / 0
+catch error
+    display "Caught: {error}".
+
+-- Natural error handling
+attempt
+    raise "custom error"
+if something goes wrong
+    display "Handled it".
+
+display "All stdlib tests passed"

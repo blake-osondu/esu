@@ -245,6 +245,18 @@ void ast_free(ASTNode *node) {
             ast_free(node->as.index_expr.object);
             ast_free(node->as.index_expr.index);
             break;
+        case NODE_TRY_STMT:
+            for (int i = 0; i < node->as.try_stmt.body.count; i++)
+                ast_free(node->as.try_stmt.body.items[i]);
+            free(node->as.try_stmt.body.items);
+            free(node->as.try_stmt.error_var);
+            for (int i = 0; i < node->as.try_stmt.catch_body.count; i++)
+                ast_free(node->as.try_stmt.catch_body.items[i]);
+            free(node->as.try_stmt.catch_body.items);
+            break;
+        case NODE_RAISE_STMT:
+            ast_free(node->as.raise_stmt.value);
+            break;
     }
 
     free(node);

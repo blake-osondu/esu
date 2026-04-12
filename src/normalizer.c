@@ -468,6 +468,149 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             continue;
         }
 
+        /* Possessive form: "X's Y" → "Y of X"
+         * The lexer emits X, __poss, Y tokens. We rewrite to Y, of, X. */
+        if (is_word(tokens, i, count, "__poss")) {
+            /* We need to reorder: the previous output token (X) should come
+             * after Y. Pull the previous token from the output. */
+            if (out.count > 0 && i + 1 < count &&
+                is_type(tokens, i+1, count, TOK_WORD)) {
+                Token subject = out.items[out.count - 1];
+                out.count--; /* pop X from output */
+                /* Emit: Y of X */
+                tlist_push(&out, clone_token(&tokens[i+1]));
+                tlist_push(&out, syn_word("of", line, col));
+                tlist_push(&out, subject); /* reuse the popped token */
+                i += 2; /* skip __poss and Y */
+                continue;
+            }
+            /* Fallback: just drop the marker */
+            i++;
+            continue;
+        }
+
+        /*
+         * ===== ERROR HANDLING SUGAR =====
+         */
+
+        /* "try to" / "attempt to" → "try" (strip "to") */
+        if ((is_word(tokens, i, count, "try") || is_word(tokens, i, count, "attempt")) &&
+            is_word(tokens, i+1, count, "to") &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            tlist_push(&out, syn_word("try", line, col));
+            i += 2;
+            continue;
+        }
+
+        /* "attempt" → "try" (at line start) */
+        if (is_word(tokens, i, count, "attempt") &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            tlist_push(&out, syn_word("try", line, col));
+            i++;
+            continue;
+        }
+
+        /* "but if it fails" / "but if it errors" → "catch error"
+         * Also "if it fails", "if it errors", "if that fails" */
+        if (is_word(tokens, i, count, "but") &&
+            is_word(tokens, i+1, count, "if") &&
+            (is_word(tokens, i+2, count, "it") || is_word(tokens, i+2, count, "that")) &&
+            (is_word(tokens, i+3, count, "fails") ||
+             is_word(tokens, i+3, count, "errors"))) {
+            tlist_push(&out, syn_word("catch", line, col));
+            tlist_push(&out, syn_word("error", line, col));
+            i += 4;
+            /* Skip optional "then" */
+            if (is_word(tokens, i, count, "then")) i++;
+            continue;
+        }
+        if (is_word(tokens, i, count, "if") &&
+            (is_word(tokens, i+1, count, "it") || is_word(tokens, i+1, count, "that")) &&
+            (is_word(tokens, i+2, count, "fails") ||
+             is_word(tokens, i+2, count, "errors"))) {
+            tlist_push(&out, syn_word("catch", line, col));
+            tlist_push(&out, syn_word("error", line, col));
+            i += 3;
+            if (is_word(tokens, i, count, "then")) i++;
+            continue;
+        }
+
+        /* "catch the error" → "catch error" (strip "the") */
+        if (is_word(tokens, i, count, "catch") &&
+            is_word(tokens, i+1, count, "the") &&
+            is_word(tokens, i+2, count, "error")) {
+            tlist_push(&out, syn_word("catch", line, col));
+            tlist_push(&out, syn_word("error", line, col));
+            i += 3;
+            /* Skip optional "then" */
+            if (is_word(tokens, i, count, "then")) i++;
+            continue;
+        }
+
+        /* "catch X then" → "catch X" (strip trailing "then") */
+        if (is_word(tokens, i, count, "catch")) {
+            tlist_push(&out, syn_word("catch", line, col));
+            i++;
+            /* Optional identifier + optional "then" */
+            if (i < count && tokens[i].type == TOK_WORD &&
+                !is_word(tokens, i, count, "then") &&
+                !is_word(tokens, i, count, "end")) {
+                tlist_push(&out, clone_token(&tokens[i]));
+                i++;
+            }
+            if (is_word(tokens, i, count, "then")) i++;
+            continue;
+        }
+
+        /* "if something goes wrong" / "if an error occurs" / "on error" → "catch" */
+        if (is_word(tokens, i, count, "if") &&
+            is_word(tokens, i+1, count, "something") &&
+            is_word(tokens, i+2, count, "goes") &&
+            is_word(tokens, i+3, count, "wrong")) {
+            tlist_push(&out, syn_word("catch", line, col));
+            i += 4;
+            continue;
+        }
+        if (is_word(tokens, i, count, "if") &&
+            (is_word(tokens, i+1, count, "an") || is_word(tokens, i+1, count, "a")) &&
+            is_word(tokens, i+2, count, "error") &&
+            is_word(tokens, i+3, count, "occurs")) {
+            tlist_push(&out, syn_word("catch", line, col));
+            i += 4;
+            continue;
+        }
+        if (is_word(tokens, i, count, "on") &&
+            is_word(tokens, i+1, count, "error")) {
+            tlist_push(&out, syn_word("catch", line, col));
+            i += 2;
+            continue;
+        }
+        /* "handle error" / "handle the error" → "catch error" */
+        if (is_word(tokens, i, count, "handle") &&
+            (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            tlist_push(&out, syn_word("catch", line, col));
+            i++;
+            continue;
+        }
+
+        /* "throw" → "raise" (already handled in parser but also normalize) */
+
+        /* "fail with" → "raise" */
+        if (is_word(tokens, i, count, "fail") &&
+            is_word(tokens, i+1, count, "with")) {
+            tlist_push(&out, syn_word("raise", line, col));
+            i += 2;
+            continue;
+        }
+
+        /* "report error" → "raise" */
+        if (is_word(tokens, i, count, "report") &&
+            is_word(tokens, i+1, count, "error")) {
+            tlist_push(&out, syn_word("raise", line, col));
+            i += 2;
+            continue;
+        }
+
         /*
          * ===== FUNCTION DEFINITION SUGAR =====
          * All map to: function NAME [taking PARAMS] ... end

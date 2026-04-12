@@ -1,0 +1,55 @@
+-- Basic try/catch
+try
+    display "before error"
+    raise "something went wrong"
+    display "this should not print"
+catch error
+    display "Caught: {error}"
+end
+
+-- Try/catch with period
+try
+    raise "oops"
+catch err
+    display "Got: {err}".
+
+-- Division by zero is caught
+try
+    x is 10 / 0
+    display x
+catch error
+    display "Math error: {error}".
+
+-- Throw keyword (alias for raise)
+try
+    throw "bad input"
+catch error
+    display "Thrown: {error}".
+
+-- Natural language: "attempt" and "if something goes wrong"
+attempt
+    raise "failure"
+if something goes wrong
+    display "Handled naturally".
+
+-- "fail with" sugar
+try
+    fail with "catastrophe"
+catch error
+    display "Failed: {error}".
+
+-- Nested try/catch
+try
+    try
+        raise "inner"
+    catch e
+        display "Inner caught: {e}"
+        raise "outer"
+    end
+catch e
+    display "Outer caught: {e}"
+end
+
+-- Unhandled error (should crash with message)
+-- raise "this would crash"
+display "All error tests passed"

@@ -25,6 +25,8 @@ typedef enum {
     NODE_LIST_LIT,
     NODE_MAP_LIT,
     NODE_INDEX_EXPR,
+    NODE_TRY_STMT,
+    NODE_RAISE_STMT,
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -124,6 +126,16 @@ struct ASTNode {
 
         /* NODE_INDEX_EXPR: collection[index] */
         struct { ASTNode *object; ASTNode *index; } index_expr;
+
+        /* NODE_TRY_STMT */
+        struct {
+            NodeList body;
+            char *error_var;    /* variable name for caught error */
+            NodeList catch_body;
+        } try_stmt;
+
+        /* NODE_RAISE_STMT */
+        struct { ASTNode *value; } raise_stmt;
     } as;
 };
 

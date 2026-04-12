@@ -407,6 +407,39 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             /* Function defs are handled in codegen_generate, not here */
             break;
 
+        case NODE_TRY_STMT: {
+            const char *err_var = node->as.try_stmt.error_var;
+            emit_indent(cg);
+            emit(cg, "babel_error_push();\n");
+            emit_indent(cg);
+            emit(cg, "if (setjmp(*babel_error_frame()) == 0) {\n");
+            cg->indent++;
+            gen_block(cg, &node->as.try_stmt.body);
+            emit_indent(cg);
+            emit(cg, "babel_error_pop();\n");
+            cg->indent--;
+            emit_indent(cg);
+            emit(cg, "} else {\n");
+            cg->indent++;
+            emit_indent(cg);
+            emit(cg, "BabelValue *");
+            emit_c_ident(cg, "var_", err_var);
+            emit(cg, " = babel_get_error();\n");
+            mark_declared(cg, err_var);
+            gen_block(cg, &node->as.try_stmt.catch_body);
+            cg->indent--;
+            emit_indent(cg);
+            emit(cg, "}\n");
+            break;
+        }
+
+        case NODE_RAISE_STMT:
+            emit_indent(cg);
+            emit(cg, "babel_raise(");
+            gen_expression(cg, node->as.raise_stmt.value);
+            emit(cg, ");\n");
+            break;
+
         default:
             /* Expression statement */
             emit_indent(cg);

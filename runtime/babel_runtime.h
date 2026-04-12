@@ -8,6 +8,8 @@
 #include "babel_string.h"
 #include "babel_list.h"
 #include "babel_map.h"
+#include "babel_error.h"
+#include "babel_math.h"
 
 void babel_runtime_init(void);
 void babel_runtime_cleanup(void);

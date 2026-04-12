@@ -1,0 +1,23 @@
+-- One-liner try/catch
+try, raise "oops", catch error, display "Got: {error}".
+
+-- "try to" + "catch error then" one-liner
+try to raise "err1" catch error, display "Caught: {error}".
+
+-- With natural "but if it fails"
+attempt to raise "failure" but if it fails then display "Handled: {error}".
+
+-- Multiple statements in try body, separated by commas
+try, x is 10, y is 20, display x + y, raise "after", catch e, display "Error: {e}".
+
+-- Runtime error in one-liner
+try, z is 10 / 0, catch error, display "Math error: {error}".
+
+-- Nested: inner needs its own period terminator
+try
+    try, raise "inner", catch e, display "Inner: {e}".
+    display "After inner"
+catch outer
+    display "Outer: {outer}".
+
+display "Done"

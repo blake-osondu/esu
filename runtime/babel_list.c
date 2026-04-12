@@ -123,6 +123,20 @@ BabelValue *babel_list_joined(BabelValue *list_val, BabelValue *separator) {
     return result;
 }
 
+BabelValue *babel_list_slice(BabelValue *list_val, BabelValue *start, BabelValue *end) {
+    BabelValue *result = babel_list_new();
+    if (list_val->type != VAL_LIST) return result;
+    BabelList *list = list_val->as.list;
+    int a = (int)start->as.number;
+    int b = (int)end->as.number;
+    if (a < 0) a = 0;
+    if (b > list->count) b = list->count;
+    for (int i = a; i < b; i++) {
+        babel_list_append(result, list->items[i]);
+    }
+    return result;
+}
+
 BabelValue *babel_index(BabelValue *collection, BabelValue *index) {
     if (collection->type == VAL_LIST) {
         return babel_list_get(collection, index);

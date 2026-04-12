@@ -1,0 +1,53 @@
+-- === Natural try/catch ===
+try to
+    raise "err1"
+catch the error then
+    display "1: {error}".
+
+attempt to
+    raise "err2"
+but if it fails then
+    display "2: {error}".
+
+try
+    raise "err3"
+but if it errors
+    display "3: {error}".
+
+try
+    raise "err4"
+if it fails then
+    display "4: {error}".
+
+-- === Possessive form ===
+x is 42
+display x's type
+display "hello"'s length
+
+my-list is [10, 20, 30]
+display my-list's length
+
+-- === Articles before builtins ===
+display the absolute value of -7
+display the square root of 25
+display the floor of 3.7
+display the type of "hello"
+display the length of "testing"
+
+-- === Conversion variations ===
+display the conversion of "3.14" to a number
+display the conversion of 100 to a string
+display the conversion of "42" as a number
+display the conversion of 99 as a string
+display convert "2.5" to number
+display convert 7 as a string
+
+-- === List slicing ===
+items is [10, 20, 30, 40, 50, 60]
+display items between 1 and 3 of items
+display items between 0 and 2 in items
+
+-- With ordinals
+display items between the 2nd and 5th index of items
+
+display "All natural language forms work"

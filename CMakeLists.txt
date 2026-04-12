@@ -17,6 +17,8 @@ add_library(babel_runtime STATIC
     runtime/babel_string.c
     runtime/babel_list.c
     runtime/babel_map.c
+    runtime/babel_error.c
+    runtime/babel_math.c
 )
 target_link_libraries(babel_runtime PRIVATE m)
 target_include_directories(babel_runtime PUBLIC ${CMAKE_SOURCE_DIR}/runtime)

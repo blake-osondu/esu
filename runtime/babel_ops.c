@@ -1,4 +1,5 @@
 #include "babel_ops.h"
+#include "babel_error.h"
 #include "babel_mem.h"
 #include <stdio.h>
 #include <string.h>
@@ -54,7 +55,7 @@ BabelValue *babel_mul(BabelValue *a, BabelValue *b) {
 BabelValue *babel_div(BabelValue *a, BabelValue *b) {
     double divisor = as_number(b);
     if (divisor == 0.0) {
-        fprintf(stderr, "Runtime error: division by zero\n");
+        babel_raise_msg("division by zero");
         return babel_nothing();
     }
     return babel_number(as_number(a) / divisor);
@@ -63,7 +64,7 @@ BabelValue *babel_div(BabelValue *a, BabelValue *b) {
 BabelValue *babel_mod(BabelValue *a, BabelValue *b) {
     double divisor = as_number(b);
     if (divisor == 0.0) {
-        fprintf(stderr, "Runtime error: modulo by zero\n");
+        babel_raise_msg("modulo by zero");
         return babel_nothing();
     }
     return babel_number(fmod(as_number(a), as_number(b)));
