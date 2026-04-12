@@ -3,6 +3,16 @@
 #include <stdarg.h>
 #include <stdlib.h>
 
+int babel_recoverable_errors = 0;
+jmp_buf babel_recovery_jmp;
+
+static void handle_error_exit(void) {
+    if (babel_recoverable_errors) {
+        longjmp(babel_recovery_jmp, 1);
+    }
+    exit(1);
+}
+
 void babel_error(int line, int col, const char *fmt, ...) {
     fprintf(stderr, "Error at line %d, col %d: ", line, col);
     va_list args;
@@ -10,7 +20,7 @@ void babel_error(int line, int col, const char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     va_end(args);
     fprintf(stderr, "\n");
-    exit(1);
+    handle_error_exit();
 }
 
 void babel_error_at_token(Token *tok, const char *fmt, ...) {
@@ -24,5 +34,5 @@ void babel_error_at_token(Token *tok, const char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     va_end(args);
     fprintf(stderr, "\n");
-    exit(1);
+    handle_error_exit();
 }
