@@ -27,6 +27,12 @@ typedef enum {
     NODE_INDEX_EXPR,
     NODE_TRY_STMT,
     NODE_RAISE_STMT,
+    NODE_STRUCT_DECL,       /* "a person has a name and an age" */
+    NODE_METHOD_DEF,        /* "to greet a person ..." */
+    NODE_CONSTRUCTOR,       /* "a new person with name ..., age ..." */
+    NODE_MEMBER_EXPR,       /* x.field — read-only */
+    NODE_METHOD_CALL,       /* x.method(args) */
+    NODE_FIELD_ASSIGN,      /* x.field is V  or  x[k] is V */
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -136,6 +142,51 @@ struct ASTNode {
 
         /* NODE_RAISE_STMT */
         struct { ASTNode *value; } raise_stmt;
+
+        /* NODE_STRUCT_DECL: "a person has a name and an age" */
+        struct {
+            char *type_name;
+            char **field_names;
+            int field_count;
+        } struct_decl;
+
+        /* NODE_METHOD_DEF: "to greet a person ... end" */
+        struct {
+            char *type_name;        /* "person" */
+            char *name;             /* "greet" */
+            char **params;          /* extra parameters beyond self */
+            int param_count;
+            NodeList body;
+        } method_def;
+
+        /* NODE_CONSTRUCTOR: "a new person with name X and age Y" */
+        struct {
+            char *type_name;
+            char **field_names;     /* NULL for positional args */
+            ASTNode **values;
+            int count;
+        } constructor;
+
+        /* NODE_MEMBER_EXPR: x.field */
+        struct {
+            ASTNode *object;
+            char *field;
+        } member_expr;
+
+        /* NODE_METHOD_CALL: x.method(args) or "have x method" */
+        struct {
+            ASTNode *object;
+            char *method_name;
+            ASTNode **args;
+            int arg_count;
+        } method_call;
+
+        /* NODE_FIELD_ASSIGN: x.field is V  or  x[k] is V */
+        struct {
+            ASTNode *object;
+            ASTNode *key;       /* string expr for .field, any expr for [k] */
+            ASTNode *value;
+        } field_assign;
     } as;
 };
 
@@ -156,6 +207,12 @@ ASTNode *ast_return(ASTNode *value, int line, int col);
 ASTNode *ast_list_lit(ASTNode **items, int count, int line, int col);
 ASTNode *ast_map_lit(char **keys, ASTNode **values, int count, int line, int col);
 ASTNode *ast_index_expr(ASTNode *object, ASTNode *index, int line, int col);
+ASTNode *ast_struct_decl(const char *type_name, char **field_names, int field_count, int line, int col);
+ASTNode *ast_method_def(const char *type_name, const char *name, char **params, int param_count, int line, int col);
+ASTNode *ast_constructor(const char *type_name, char **field_names, ASTNode **values, int count, int line, int col);
+ASTNode *ast_member_expr(ASTNode *object, const char *field, int line, int col);
+ASTNode *ast_method_call(ASTNode *object, const char *method_name, ASTNode **args, int arg_count, int line, int col);
+ASTNode *ast_field_assign(ASTNode *object, ASTNode *key, ASTNode *value, int line, int col);
 
 /* NodeList helpers */
 void node_list_init(NodeList *list);

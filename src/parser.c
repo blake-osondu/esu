@@ -5,10 +5,53 @@
 #include <string.h>
 #include <ctype.h>
 
+static void add_method_name(Parser *p, const char *name) {
+    /* Avoid duplicates */
+    for (int i = 0; i < p->method_name_count; i++) {
+        if (strcmp(p->method_names[i], name) == 0) return;
+    }
+    if (p->method_name_count >= p->method_name_capacity) {
+        p->method_name_capacity = p->method_name_capacity == 0 ? 8 : p->method_name_capacity * 2;
+        p->method_names = realloc(p->method_names,
+                                  sizeof(char *) * p->method_name_capacity);
+    }
+    p->method_names[p->method_name_count] = malloc(strlen(name) + 1);
+    strcpy(p->method_names[p->method_name_count], name);
+    p->method_name_count++;
+}
+
+static int is_known_method(Parser *p, const char *name) {
+    for (int i = 0; i < p->method_name_count; i++) {
+        if (strcmp(p->method_names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Pre-scan token stream to collect all method names defined in the program.
+ * We look for the pattern: "function METHOD a/an TYPE" (after normalizer
+ * converts "to" → "function"). */
+static void prescan_methods(Parser *p) {
+    for (int i = 0; i + 3 < p->count; i++) {
+        if (p->tokens[i].type == TOK_WORD &&
+            strcmp(p->tokens[i].value, "function") == 0 &&
+            p->tokens[i+1].type == TOK_WORD &&
+            p->tokens[i+2].type == TOK_WORD &&
+            (strcmp(p->tokens[i+2].value, "a") == 0 ||
+             strcmp(p->tokens[i+2].value, "an") == 0) &&
+            p->tokens[i+3].type == TOK_WORD) {
+            add_method_name(p, p->tokens[i+1].value);
+        }
+    }
+}
+
 void parser_init(Parser *p, Token *tokens, int count) {
     p->tokens = tokens;
     p->count = count;
     p->pos = 0;
+    p->method_names = NULL;
+    p->method_name_count = 0;
+    p->method_name_capacity = 0;
+    prescan_methods(p);
 }
 
 static Token *current(Parser *p) {
@@ -101,6 +144,7 @@ static ASTNode *parse_postfix(Parser *p);
 static ASTNode *parse_unary(Parser *p);
 static ASTNode *parse_file_path(Parser *p);
 static int looks_like_past_tense(Parser *p);
+static char *str_dup_parser(const char *s);
 static ASTNode *parse_statement(Parser *p);
 static void parse_block(Parser *p, NodeList *list);
 
@@ -656,6 +700,81 @@ static ASTNode *parse_primary(Parser *p) {
         babel_error_at_token(current(p), "expected 'string' or 'number' after conversion");
     }
 
+    /* Constructor: "a [new] TYPE with FIELD X, FIELD Y, ..."
+     *           or "a [new] TYPE named NAME with FIELD X, ..."
+     *           or "a new TYPE" (no fields)
+     * Must check before other uses of "a". */
+    if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *a_tok = advance_parser(p);
+        int had_new = 0;
+        if (check_word(p, "new")) { advance_parser(p); had_new = 1; }
+
+        /* Next must be a type name (a plain word, not a reserved word) */
+        int ok = 0;
+        if (check_type(p, TOK_WORD)) {
+            const char *w = current(p)->value;
+            /* Reject known non-type words (articles, builtins, etc.) */
+            if (strcmp(w, "list") != 0 && strcmp(w, "new") != 0 &&
+                strcmp(w, "number") != 0 && strcmp(w, "string") != 0 &&
+                strcmp(w, "map") != 0) {
+                ok = 1;
+            }
+        }
+
+        if (!ok) { p->pos = saved; }
+        else {
+            Token *type_tok = advance_parser(p);
+            int has_with = check_word(p, "with");
+            int has_named = check_word(p, "named") || check_word(p, "called");
+
+            if (!has_with && !has_named && !had_new) {
+                /* Not a constructor — backtrack */
+                p->pos = saved;
+            } else {
+                int cap = 4;
+                char **field_names = malloc(sizeof(char *) * cap);
+                ASTNode **values = malloc(sizeof(ASTNode *) * cap);
+                int count = 0;
+
+                if (has_named) {
+                    advance_parser(p);
+                    ASTNode *val = parse_comparison(p);
+                    field_names[count] = str_dup_parser("name");
+                    values[count] = val;
+                    count++;
+                    has_with = check_word(p, "with");
+                }
+
+                if (has_with) {
+                    advance_parser(p);
+                    while (check_type(p, TOK_WORD)) {
+                        Token *fname = advance_parser(p);
+                        ASTNode *val = parse_comparison(p);
+                        if (count >= cap) {
+                            cap *= 2;
+                            field_names = realloc(field_names, sizeof(char *) * cap);
+                            values = realloc(values, sizeof(ASTNode *) * cap);
+                        }
+                        field_names[count] = str_dup_parser(fname->value);
+                        values[count] = val;
+                        count++;
+                        if (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                            int was_comma = check_type(p, TOK_COMMA);
+                            advance_parser(p);
+                            if (was_comma && check_word(p, "and")) advance_parser(p);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                return ast_constructor(type_tok->value, field_names, values, count,
+                                       a_tok->line, a_tok->col);
+            }
+        }
+    }
+
     /* Named math operations: "the sum of X and Y" → X + Y
      * "the" is stripped by normalizer in mid-expression, so we check for
      * "sum of", "product of", "difference of", "quotient of" */
@@ -958,12 +1077,48 @@ static int looks_like_third_person_call(Parser *p) {
 static ASTNode *parse_postfix(Parser *p) {
     ASTNode *expr = parse_primary(p);
 
-    /* Index expressions: x[0], x["key"] */
-    while (check_type(p, TOK_LBRACKET)) {
-        advance_parser(p); /* consume '[' */
-        ASTNode *index = parse_expression(p);
-        expect_type(p, TOK_RBRACKET, "expected ']' after index");
-        expr = ast_index_expr(expr, index, expr->line, expr->col);
+    /* Index and dot access: x[0], x["key"], x.field, x.method(args) */
+    for (;;) {
+        if (check_type(p, TOK_LBRACKET)) {
+            advance_parser(p);
+            ASTNode *index = parse_expression(p);
+            expect_type(p, TOK_RBRACKET, "expected ']' after index");
+            expr = ast_index_expr(expr, index, expr->line, expr->col);
+            continue;
+        }
+        if (check_type(p, TOK_DOT) && p->pos + 1 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD) {
+            Token *dot = advance_parser(p); /* consume '.' */
+            Token *field = advance_parser(p); /* the field/method name */
+            /* If followed by '(' it's a method call */
+            if (check_type(p, TOK_LPAREN)) {
+                advance_parser(p);
+                int arg_cap = 4;
+                ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
+                int arg_count = 0;
+                if (!check_type(p, TOK_RPAREN)) {
+                    args[arg_count++] = parse_expression(p);
+                    while (check_type(p, TOK_COMMA)) {
+                        advance_parser(p);
+                        if (arg_count >= arg_cap) {
+                            arg_cap *= 2;
+                            args = realloc(args, sizeof(ASTNode *) * arg_cap);
+                        }
+                        args[arg_count++] = parse_expression(p);
+                    }
+                }
+                expect_type(p, TOK_RPAREN, "expected ')' after method arguments");
+                expr = ast_method_call(expr, field->value, args, arg_count,
+                                       dot->line, dot->col);
+            } else {
+                /* Field access — but could also be a zero-arg method call.
+                 * Heuristic: if it's followed by something that looks like
+                 * a method-call continuation (end of expr), just emit member. */
+                expr = ast_member_expr(expr, field->value, dot->line, dot->col);
+            }
+            continue;
+        }
+        break;
     }
 
     while (looks_like_past_tense(p)) {
@@ -1638,8 +1793,35 @@ static void parse_param_list(Parser *p, char ***out_params, int *out_count) {
 }
 
 static ASTNode *parse_function_def(Parser *p) {
-    Token *tok = advance_parser(p); /* consume 'function' */
-    Token *name = expect_type(p, TOK_WORD, "expected function name");
+    Token *tok = advance_parser(p); /* consume 'function' (was 'to'/'method'/etc) */
+    Token *name = expect_type(p, TOK_WORD, "expected function/method name");
+
+    /* Check for method form: "function NAME a TYPE [taking params] ..." */
+    if (check_word(p, "a") || check_word(p, "an")) {
+        int saved = p->pos;
+        advance_parser(p); /* consume a/an */
+        if (check_type(p, TOK_WORD)) {
+            Token *type_tok = advance_parser(p);
+            /* Optional extra params */
+            char **params = NULL;
+            int param_count = 0;
+            if (check_word(p, "taking") || check_word(p, "with") ||
+                check_word(p, "and")) {
+                advance_parser(p);
+                parse_param_list(p, &params, &param_count);
+            }
+            skip_separators(p);
+
+            ASTNode *node = ast_method_def(type_tok->value, name->value,
+                                           params, param_count,
+                                           tok->line, tok->col);
+            parse_block(p, &node->as.method_def.body);
+            expect_block_end(p, "method definition");
+            return node;
+        }
+        /* Not a method — restore */
+        p->pos = saved;
+    }
 
     char **params = NULL;
     int param_count = 0;
@@ -1697,6 +1879,41 @@ static ASTNode *parse_statement(Parser *p) {
         node_list_init(&node->as.for_in.body);
         node_list_push(&node->as.for_in.body, print_node);
         return node;
+    }
+
+    /* Struct declaration: "a/an TYPE has [a/an] FIELD, [a/an] FIELD, and [a/an] FIELD" */
+    if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        p->tokens[p->pos + 2].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 2].value, "has") == 0) {
+        Token *a_tok = advance_parser(p); /* consume a/an */
+        Token *type_tok = advance_parser(p); /* type name */
+        advance_parser(p); /* consume "has" */
+
+        int cap = 4;
+        char **fields = malloc(sizeof(char *) * cap);
+        int count = 0;
+
+        /* Parse field list: [a/an] FIELD [, [a/an] FIELD] [, and [a/an] FIELD] */
+        while (check_type(p, TOK_WORD)) {
+            /* Skip optional article */
+            if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
+            if (!check_type(p, TOK_WORD)) break;
+            Token *fname = advance_parser(p);
+            if (count >= cap) { cap *= 2; fields = realloc(fields, sizeof(char *) * cap); }
+            fields[count++] = str_dup_parser(fname->value);
+
+            if (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                int was_comma = check_type(p, TOK_COMMA);
+                advance_parser(p);
+                if (was_comma && check_word(p, "and")) advance_parser(p);
+            } else {
+                break;
+            }
+        }
+
+        return ast_struct_decl(type_tok->value, fields, count,
+                               a_tok->line, a_tok->col);
     }
 
     /* Print statement */
@@ -1978,6 +2195,44 @@ static ASTNode *parse_statement(Parser *p) {
         return node;
     }
 
+    /* Field/index assignment: "X.field is V" or "X[key] is V"
+     * We detect by parsing an expression and checking for "is" after. */
+    if (tok->type == TOK_WORD) {
+        /* Peek: is this IDENT.IDENT is ... ? or IDENT[...] is ...? */
+        int saved = p->pos;
+        if (p->pos + 1 < p->count &&
+            (p->tokens[p->pos + 1].type == TOK_DOT ||
+             p->tokens[p->pos + 1].type == TOK_LBRACKET)) {
+            /* Try parsing an lvalue expression, then check for "is" */
+            ASTNode *lhs = parse_postfix(p);
+            if (check_word(p, "is") &&
+                (lhs->type == NODE_MEMBER_EXPR || lhs->type == NODE_INDEX_EXPR)) {
+                advance_parser(p); /* consume "is" */
+                ASTNode *value = parse_expression(p);
+                ASTNode *obj, *key;
+                if (lhs->type == NODE_MEMBER_EXPR) {
+                    obj = lhs->as.member_expr.object;
+                    key = ast_string_lit(lhs->as.member_expr.field,
+                                         lhs->line, lhs->col);
+                    /* Prevent double-free: detach object from lhs */
+                    lhs->as.member_expr.object = NULL;
+                    free(lhs->as.member_expr.field);
+                    lhs->as.member_expr.field = NULL;
+                } else {
+                    obj = lhs->as.index_expr.object;
+                    key = lhs->as.index_expr.index;
+                    lhs->as.index_expr.object = NULL;
+                    lhs->as.index_expr.index = NULL;
+                }
+                ast_free(lhs);
+                return ast_field_assign(obj, key, value, tok->line, tok->col);
+            }
+            /* Not a field assignment — backtrack */
+            ast_free(lhs);
+            p->pos = saved;
+        }
+    }
+
     /* Assignment: IDENT is EXPR */
     if (tok->type == TOK_WORD) {
         if (p->pos + 1 < p->count &&
@@ -1985,6 +2240,48 @@ static ASTNode *parse_statement(Parser *p) {
             strcmp(p->tokens[p->pos + 1].value, "is") == 0) {
             return parse_assignment(p);
         }
+    }
+
+    /* Bare method call: "IDENT METHOD_NAME [args]"
+     * where METHOD_NAME is a known method name from the pre-scan.
+     * Args are separated by "and", ",", or natural prepositions like "to". */
+    if (tok->type == TOK_WORD &&
+        p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        is_known_method(p, p->tokens[p->pos + 1].value)) {
+        Token *obj_tok = advance_parser(p);
+        Token *method_tok = advance_parser(p);
+        ASTNode *obj = ast_identifier(obj_tok->value, obj_tok->line, obj_tok->col);
+
+        /* Parse args until end of line/statement */
+        int arg_cap = 4;
+        ASTNode **args = malloc(sizeof(ASTNode *) * arg_cap);
+        int arg_count = 0;
+
+        /* Check if there's an arg: not newline/comma/period/EOF */
+        while (!is_separator(p) && !check_type(p, TOK_EOF) &&
+               !check_type(p, TOK_DOT) && !is_block_end(p)) {
+            /* Optional preposition noise words: "to", "with", "at" */
+            if (check_word(p, "to") || check_word(p, "with") ||
+                check_word(p, "at") || check_word(p, "on") ||
+                check_word(p, "by") || check_word(p, "for")) {
+                advance_parser(p);
+                continue;
+            }
+            if (arg_count >= arg_cap) {
+                arg_cap *= 2;
+                args = realloc(args, sizeof(ASTNode *) * arg_cap);
+            }
+            args[arg_count++] = parse_comparison(p);
+            if (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                int was_comma = check_type(p, TOK_COMMA);
+                advance_parser(p);
+                if (was_comma && check_word(p, "and")) advance_parser(p);
+            }
+        }
+
+        return ast_method_call(obj, method_tok->value, args, arg_count,
+                               obj_tok->line, obj_tok->col);
     }
 
     /* Expression statement */

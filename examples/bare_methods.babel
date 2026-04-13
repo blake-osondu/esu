@@ -1,0 +1,47 @@
+-- Struct with methods including state-mutating ones
+a person has a name and an age.
+
+to greet a person
+    display "Hello, I'm " + self.name.
+
+to meet a person and other
+    display self.name + " meets " + other.name.
+
+to celebrate a person
+    self.age is self.age + 1
+    display self.name + " is now " + self.age + " years old!".
+
+to update_name a person and new_name
+    self.name is new_name
+    display "Updated name to " + new_name.
+
+alice is a new person with name "Alice" and age 30
+
+-- Traditional dot syntax
+alice.greet()
+
+-- Bare method call
+alice greet
+
+-- With args
+bob is a person with name "Bob" and age 25
+alice meet bob
+
+-- State mutation
+alice celebrate
+alice celebrate
+
+-- Update field
+alice update_name to "Blake"
+display alice.name
+
+-- Verify age changed
+display "Alice's age is now " + alice's age
+
+-- Works with bracket syntax too
+alice["age"] is 100
+display alice.age
+
+-- Dot-syntax field assignment
+alice.name is "Original"
+display alice.name

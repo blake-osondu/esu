@@ -42,6 +42,7 @@ struct BabelMap {
     BabelMapEntry *entries;
     int count;
     int capacity;
+    char *type_name;  /* NULL for plain maps, set for struct instances */
 };
 
 BabelValue *babel_nothing(void);
@@ -50,6 +51,7 @@ BabelValue *babel_string(const char *s);
 BabelValue *babel_bool(int b);
 BabelValue *babel_list_new(void);
 BabelValue *babel_map_new(void);
+BabelValue *babel_struct_new(const char *type_name);
 
 BabelValue *babel_retain(BabelValue *val);
 void babel_release(BabelValue *val);

@@ -47,6 +47,13 @@ BabelValue *babel_map_new(void) {
     val->as.map->entries = NULL;
     val->as.map->count = 0;
     val->as.map->capacity = 0;
+    val->as.map->type_name = NULL;
+    return val;
+}
+
+BabelValue *babel_struct_new(const char *type_name) {
+    BabelValue *val = babel_map_new();
+    val->as.map->type_name = babel_strdup(type_name);
     return val;
 }
 
@@ -75,6 +82,7 @@ void babel_release(BabelValue *val) {
                 babel_release(map->entries[i].value);
             }
             babel_free(map->entries);
+            if (map->type_name) babel_free(map->type_name);
             babel_free(map);
         }
         babel_free(val);
@@ -88,7 +96,10 @@ const char *babel_type_name(BabelValue *val) {
         case VAL_STRING:  return "string";
         case VAL_BOOL:    return "boolean";
         case VAL_LIST:    return "list";
-        case VAL_MAP:     return "map";
+        case VAL_MAP:
+            /* Typed struct? Return the struct's type name */
+            if (val->as.map->type_name) return val->as.map->type_name;
+            return "map";
     }
     return "unknown";
 }
@@ -139,6 +150,13 @@ char *babel_to_cstring(BabelValue *val) {
             int cap = 256;
             char *out = babel_alloc(cap);
             int len = 0;
+            /* If this is a typed struct, show "typename{...}" */
+            if (map->type_name) {
+                int tn_len = strlen(map->type_name);
+                while (len + tn_len + 2 > cap) { cap *= 2; out = babel_realloc(out, cap); }
+                memcpy(out + len, map->type_name, tn_len);
+                len += tn_len;
+            }
             out[len++] = '{';
             for (int i = 0; i < map->count; i++) {
                 if (i > 0) { out[len++] = ','; out[len++] = ' '; }

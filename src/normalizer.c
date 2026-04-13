@@ -468,19 +468,13 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             continue;
         }
 
-        /* Possessive form: "X's Y" → "Y of X"
-         * The lexer emits X, __poss, Y tokens. We rewrite to Y, of, X. */
+        /* Possessive form: "X's Y" → "X.Y" (dot access, handled by parser)
+         * The lexer emits X, __poss, Y tokens. We rewrite to X . Y. */
         if (is_word(tokens, i, count, "__poss")) {
-            /* We need to reorder: the previous output token (X) should come
-             * after Y. Pull the previous token from the output. */
-            if (out.count > 0 && i + 1 < count &&
-                is_type(tokens, i+1, count, TOK_WORD)) {
-                Token subject = out.items[out.count - 1];
-                out.count--; /* pop X from output */
-                /* Emit: Y of X */
+            if (i + 1 < count && is_type(tokens, i+1, count, TOK_WORD)) {
+                /* Insert a dot between the previous output token and the next */
+                tlist_push(&out, syn_op(TOK_DOT, ".", line, col));
                 tlist_push(&out, clone_token(&tokens[i+1]));
-                tlist_push(&out, syn_word("of", line, col));
-                tlist_push(&out, subject); /* reuse the popped token */
                 i += 2; /* skip __poss and Y */
                 continue;
             }
@@ -616,7 +610,9 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
          * All map to: function NAME [taking PARAMS] ... end
          */
 
-        /* "to NAME with PARAMS" → "function NAME taking PARAMS" */
+        /* "to NAME with PARAMS" → "function NAME taking PARAMS"
+         * "to NAME a/an TYPE" → "function NAME a/an TYPE" (left for parser
+         *   to detect as a method definition) */
         if (is_word(tokens, i, count, "to") &&
             is_ident(tokens, i+1, count) &&
             (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
@@ -627,6 +623,11 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             if (is_word(tokens, i, count, "with")) {
                 tlist_push(&out, syn_word("taking", line, col));
                 i++;
+            }
+            /* "on a" / "on an" for method-on-type variant: "to greet on a person" */
+            else if (is_word(tokens, i, count, "on") &&
+                     (is_word(tokens, i+1, count, "a") || is_word(tokens, i+1, count, "an"))) {
+                i++;  /* skip "on", leave "a/an" for the method detector */
             }
             continue;
         }

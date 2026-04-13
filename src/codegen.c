@@ -198,6 +198,51 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             emit(cg, ")");
             break;
 
+        case NODE_MEMBER_EXPR:
+            /* x.field → babel_index(x, babel_string("field")) */
+            emit(cg, "babel_index(");
+            gen_expression(cg, node->as.member_expr.object);
+            emit(cg, ", babel_string(");
+            emit_c_string(cg, node->as.member_expr.field);
+            emit(cg, "))");
+            break;
+
+        case NODE_METHOD_CALL: {
+            /* x.method(args) → babel_call_method(x, "method", argv, argc) */
+            int argc = node->as.method_call.arg_count;
+            emit(cg, "({ BabelValue *_self = ");
+            gen_expression(cg, node->as.method_call.object);
+            emit(cg, "; BabelValue *_args[%d] = {", argc > 0 ? argc : 1);
+            if (argc == 0) {
+                emit(cg, "0");
+            } else {
+                for (int i = 0; i < argc; i++) {
+                    if (i > 0) emit(cg, ", ");
+                    gen_expression(cg, node->as.method_call.args[i]);
+                }
+            }
+            emit(cg, "}; babel_call_method(_self, ");
+            emit_c_string(cg, node->as.method_call.method_name);
+            emit(cg, ", _args, %d); })", argc);
+            break;
+        }
+
+        case NODE_CONSTRUCTOR: {
+            /* Create a new struct with fields set */
+            emit(cg, "({ BabelValue *_s = babel_struct_new(");
+            emit_c_string(cg, node->as.constructor.type_name);
+            emit(cg, "); ");
+            for (int i = 0; i < node->as.constructor.count; i++) {
+                emit(cg, "babel_map_set(_s, babel_string(");
+                emit_c_string(cg, node->as.constructor.field_names[i]);
+                emit(cg, "), ");
+                gen_expression(cg, node->as.constructor.values[i]);
+                emit(cg, "); ");
+            }
+            emit(cg, "_s; })");
+            break;
+        }
+
         default:
             emit(cg, "babel_nothing() /* unhandled expr */");
             break;
@@ -440,6 +485,33 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             emit(cg, ");\n");
             break;
 
+        case NODE_STRUCT_DECL:
+            /* Handled at top level — no output here */
+            break;
+        case NODE_METHOD_DEF:
+            /* Handled at top level — no output here */
+            break;
+        case NODE_METHOD_CALL:
+            /* Method call as statement: discard return */
+            emit_indent(cg);
+            gen_expression(cg, node);
+            emit(cg, ";\n");
+            break;
+
+        case NODE_FIELD_ASSIGN:
+            /* x.field is V  →  babel_map_set(x, "field", V) (for struct/map)
+             * x[k] is V     →  babel_index_set(x, k, V) (for lists) */
+            emit_indent(cg);
+            emit(cg, "{ BabelValue *_obj = ");
+            gen_expression(cg, node->as.field_assign.object);
+            emit(cg, "; BabelValue *_key = ");
+            gen_expression(cg, node->as.field_assign.key);
+            emit(cg, "; BabelValue *_val = ");
+            gen_expression(cg, node->as.field_assign.value);
+            emit(cg, "; if (_obj->type == VAL_MAP) babel_map_set(_obj, _key, _val); ");
+            emit(cg, "else babel_index_set(_obj, _key, _val); }\n");
+            break;
+
         default:
             /* Expression statement */
             emit_indent(cg);
@@ -496,6 +568,66 @@ static void gen_function_def(CodeGen *cg, ASTNode *node) {
     cg->declared_cap = saved_cap;
 }
 
+/* Emit a method definition as a C function accepting (BabelValue **args, int argc).
+ * args[0] is self. */
+static void gen_method_def(CodeGen *cg, ASTNode *node) {
+    const char *type_name = node->as.method_def.type_name;
+    const char *mname = node->as.method_def.name;
+    int param_count = node->as.method_def.param_count;
+
+    emit(cg, "static BabelValue *babel_method_");
+    /* Emit type_name with hyphens -> underscores */
+    for (const char *p = type_name; *p; p++) emit(cg, "%c", *p == '-' ? '_' : *p);
+    emit(cg, "_");
+    for (const char *p = mname; *p; p++) emit(cg, "%c", *p == '-' ? '_' : *p);
+    emit(cg, "(BabelValue **_args, int _argc) {\n");
+
+    cg->indent = 1;
+    emit_indent(cg);
+    emit(cg, "(void)_argc;\n");
+    emit_indent(cg);
+    emit(cg, "BabelValue *var_self = _args[0];\n");
+    /* Also bind the type name as a self-ish alias, e.g. "var_person = self" */
+    emit_indent(cg);
+    emit(cg, "BabelValue *");
+    emit_c_ident(cg, "var_", type_name);
+    emit(cg, " = _args[0];\n");
+
+    /* Save/reset declared vars */
+    char **saved_vars = cg->declared_vars;
+    int saved_count = cg->declared_count;
+    int saved_cap = cg->declared_cap;
+    cg->declared_cap = 16;
+    cg->declared_vars = malloc(sizeof(char *) * cg->declared_cap);
+    cg->declared_count = 0;
+    mark_declared(cg, "self");
+    mark_declared(cg, type_name);
+
+    /* Parameters */
+    for (int i = 0; i < param_count; i++) {
+        emit_indent(cg);
+        emit(cg, "BabelValue *");
+        emit_c_ident(cg, "var_", node->as.method_def.params[i]);
+        emit(cg, " = _argc > %d ? _args[%d] : babel_nothing();\n", i + 1, i + 1);
+        mark_declared(cg, node->as.method_def.params[i]);
+    }
+
+    gen_block(cg, &node->as.method_def.body);
+
+    emit_indent(cg);
+    emit(cg, "return babel_nothing();\n");
+
+    cg->indent = 0;
+    emit(cg, "}\n\n");
+
+    /* Restore scope */
+    for (int i = 0; i < cg->declared_count; i++) free(cg->declared_vars[i]);
+    free(cg->declared_vars);
+    cg->declared_vars = saved_vars;
+    cg->declared_count = saved_count;
+    cg->declared_cap = saved_cap;
+}
+
 void codegen_generate(CodeGen *cg, ASTNode *program) {
     NodeList *stmts = &program->as.program.stmts;
 
@@ -526,14 +658,43 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
         }
     }
 
-    /* Main function with non-function statements */
+    /* Emit method definitions (same level as functions) */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_METHOD_DEF) {
+            gen_method_def(cg, stmts->items[i]);
+        }
+    }
+
+    /* Main function with non-function/method statements */
     emit(cg, "int main(int argc, char **argv) {\n");
     cg->indent = 1;
     emit_indent(cg);
-    emit(cg, "babel_runtime_init();\n\n");
+    emit(cg, "babel_runtime_init();\n");
+
+    /* Register methods at startup */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_METHOD_DEF) {
+            ASTNode *m = stmts->items[i];
+            emit_indent(cg);
+            emit(cg, "babel_register_method(");
+            emit_c_string(cg, m->as.method_def.type_name);
+            emit(cg, ", ");
+            emit_c_string(cg, m->as.method_def.name);
+            emit(cg, ", babel_method_");
+            for (const char *p = m->as.method_def.type_name; *p; p++)
+                emit(cg, "%c", *p == '-' ? '_' : *p);
+            emit(cg, "_");
+            for (const char *p = m->as.method_def.name; *p; p++)
+                emit(cg, "%c", *p == '-' ? '_' : *p);
+            emit(cg, ");\n");
+        }
+    }
+    emit(cg, "\n");
 
     for (int i = 0; i < stmts->count; i++) {
-        if (stmts->items[i]->type != NODE_FUNCTION_DEF) {
+        NodeType t = stmts->items[i]->type;
+        if (t != NODE_FUNCTION_DEF && t != NODE_METHOD_DEF &&
+            t != NODE_STRUCT_DECL) {
             gen_statement(cg, stmts->items[i]);
         }
     }

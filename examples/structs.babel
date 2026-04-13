@@ -1,0 +1,50 @@
+-- Declare a struct
+a person has a name and an age.
+
+-- Create an instance
+alice is a new person with name "Alice" and age 30
+display alice
+display alice.name
+display alice.age
+display the type of alice
+
+-- Construct without "new"
+bob is a person with name "Bob" and age 25
+display bob.name
+
+-- "named" shorthand
+charlie is a person named "Charlie" with age 40
+display charlie.name
+display charlie.age
+
+-- Method definition
+to greet a person
+    display "Hello, I'm " + self.name.
+
+-- Call it via dot syntax
+alice.greet()
+bob.greet()
+charlie.greet()
+
+-- Method with extra arg
+to meet a person and other
+    display self.name + " meets " + other.name.
+
+alice.meet(bob)
+
+-- Possessive also works
+display alice's name
+display alice's age
+
+-- Another struct
+a dog has a name and a breed.
+
+rex is a new dog with name "Rex" and breed "Lab"
+display rex
+display rex.name
+display the type of rex
+
+to bark a dog
+    display self.name + " says woof!".
+
+rex.bark()

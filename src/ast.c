@@ -137,6 +137,57 @@ ASTNode *ast_index_expr(ASTNode *object, ASTNode *index, int line, int col) {
     return node;
 }
 
+ASTNode *ast_struct_decl(const char *type_name, char **field_names, int field_count, int line, int col) {
+    ASTNode *node = ast_new(NODE_STRUCT_DECL, line, col);
+    node->as.struct_decl.type_name = str_dup(type_name);
+    node->as.struct_decl.field_names = field_names;
+    node->as.struct_decl.field_count = field_count;
+    return node;
+}
+
+ASTNode *ast_method_def(const char *type_name, const char *name, char **params, int param_count, int line, int col) {
+    ASTNode *node = ast_new(NODE_METHOD_DEF, line, col);
+    node->as.method_def.type_name = str_dup(type_name);
+    node->as.method_def.name = str_dup(name);
+    node->as.method_def.params = params;
+    node->as.method_def.param_count = param_count;
+    node_list_init(&node->as.method_def.body);
+    return node;
+}
+
+ASTNode *ast_constructor(const char *type_name, char **field_names, ASTNode **values, int count, int line, int col) {
+    ASTNode *node = ast_new(NODE_CONSTRUCTOR, line, col);
+    node->as.constructor.type_name = str_dup(type_name);
+    node->as.constructor.field_names = field_names;
+    node->as.constructor.values = values;
+    node->as.constructor.count = count;
+    return node;
+}
+
+ASTNode *ast_member_expr(ASTNode *object, const char *field, int line, int col) {
+    ASTNode *node = ast_new(NODE_MEMBER_EXPR, line, col);
+    node->as.member_expr.object = object;
+    node->as.member_expr.field = str_dup(field);
+    return node;
+}
+
+ASTNode *ast_method_call(ASTNode *object, const char *method_name, ASTNode **args, int arg_count, int line, int col) {
+    ASTNode *node = ast_new(NODE_METHOD_CALL, line, col);
+    node->as.method_call.object = object;
+    node->as.method_call.method_name = str_dup(method_name);
+    node->as.method_call.args = args;
+    node->as.method_call.arg_count = arg_count;
+    return node;
+}
+
+ASTNode *ast_field_assign(ASTNode *object, ASTNode *key, ASTNode *value, int line, int col) {
+    ASTNode *node = ast_new(NODE_FIELD_ASSIGN, line, col);
+    node->as.field_assign.object = object;
+    node->as.field_assign.key = key;
+    node->as.field_assign.value = value;
+    return node;
+}
+
 void ast_free(ASTNode *node) {
     if (!node) return;
 
@@ -256,6 +307,48 @@ void ast_free(ASTNode *node) {
             break;
         case NODE_RAISE_STMT:
             ast_free(node->as.raise_stmt.value);
+            break;
+        case NODE_STRUCT_DECL:
+            free(node->as.struct_decl.type_name);
+            for (int i = 0; i < node->as.struct_decl.field_count; i++)
+                free(node->as.struct_decl.field_names[i]);
+            free(node->as.struct_decl.field_names);
+            break;
+        case NODE_METHOD_DEF:
+            free(node->as.method_def.type_name);
+            free(node->as.method_def.name);
+            for (int i = 0; i < node->as.method_def.param_count; i++)
+                free(node->as.method_def.params[i]);
+            free(node->as.method_def.params);
+            for (int i = 0; i < node->as.method_def.body.count; i++)
+                ast_free(node->as.method_def.body.items[i]);
+            free(node->as.method_def.body.items);
+            break;
+        case NODE_CONSTRUCTOR:
+            free(node->as.constructor.type_name);
+            for (int i = 0; i < node->as.constructor.count; i++) {
+                if (node->as.constructor.field_names && node->as.constructor.field_names[i])
+                    free(node->as.constructor.field_names[i]);
+                ast_free(node->as.constructor.values[i]);
+            }
+            free(node->as.constructor.field_names);
+            free(node->as.constructor.values);
+            break;
+        case NODE_MEMBER_EXPR:
+            ast_free(node->as.member_expr.object);
+            free(node->as.member_expr.field);
+            break;
+        case NODE_METHOD_CALL:
+            ast_free(node->as.method_call.object);
+            free(node->as.method_call.method_name);
+            for (int i = 0; i < node->as.method_call.arg_count; i++)
+                ast_free(node->as.method_call.args[i]);
+            free(node->as.method_call.args);
+            break;
+        case NODE_FIELD_ASSIGN:
+            ast_free(node->as.field_assign.object);
+            ast_free(node->as.field_assign.key);
+            ast_free(node->as.field_assign.value);
             break;
     }
 
