@@ -1142,6 +1142,84 @@ static ASTNode *parse_postfix(Parser *p) {
 
     /* Postfix builtin string operations */
     for (;;) {
+        /* "x is a TYPE" / "x is a kind of TYPE" / "x is an instance of TYPE"
+         * → __is_instance_of(x, "TYPE")
+         * Only triggers when followed by a/an + [kind/type/instance of] + TYPE
+         * and the token after TYPE is a separator (end of expression). */
+        if (check_word(p, "is") && p->pos + 2 < p->count) {
+            int peek = p->pos + 1;
+            /* Optional "not" */
+            int negated = 0;
+            if (peek < p->count && p->tokens[peek].type == TOK_WORD &&
+                strcmp(p->tokens[peek].value, "not") == 0) {
+                negated = 1;
+                peek++;
+            }
+            if (peek < p->count && p->tokens[peek].type == TOK_WORD &&
+                (strcmp(p->tokens[peek].value, "a") == 0 ||
+                 strcmp(p->tokens[peek].value, "an") == 0)) {
+                /* Maybe "is a/an TYPE" — but only if TYPE isn't followed
+                 * by something that would indicate it's an expression */
+                int type_pos = peek + 1;
+                /* Optional "kind/type/instance of" */
+                if (type_pos + 1 < p->count &&
+                    p->tokens[type_pos].type == TOK_WORD &&
+                    (strcmp(p->tokens[type_pos].value, "kind") == 0 ||
+                     strcmp(p->tokens[type_pos].value, "type") == 0 ||
+                     strcmp(p->tokens[type_pos].value, "instance") == 0) &&
+                    p->tokens[type_pos + 1].type == TOK_WORD &&
+                    strcmp(p->tokens[type_pos + 1].value, "of") == 0) {
+                    type_pos += 2;
+                }
+                if (type_pos < p->count && p->tokens[type_pos].type == TOK_WORD) {
+                    /* Check that what follows TYPE is a separator
+                     * (not a binary op / method call etc.) */
+                    int after = type_pos + 1;
+                    int looks_terminal = (after >= p->count ||
+                        p->tokens[after].type == TOK_NEWLINE ||
+                        p->tokens[after].type == TOK_COMMA ||
+                        p->tokens[after].type == TOK_DOT ||
+                        p->tokens[after].type == TOK_EOF ||
+                        p->tokens[after].type == TOK_RPAREN ||
+                        p->tokens[after].type == TOK_RBRACKET ||
+                        (p->tokens[after].type == TOK_WORD &&
+                         (strcmp(p->tokens[after].value, "then") == 0 ||
+                          strcmp(p->tokens[after].value, "do") == 0 ||
+                          strcmp(p->tokens[after].value, "end") == 0 ||
+                          strcmp(p->tokens[after].value, "and") == 0 ||
+                          strcmp(p->tokens[after].value, "or") == 0 ||
+                          strcmp(p->tokens[after].value, "else") == 0)));
+                    if (looks_terminal) {
+                        Token *is_tok = advance_parser(p); /* is */
+                        if (negated) advance_parser(p); /* not */
+                        advance_parser(p); /* a/an */
+                        if (check_word(p, "kind") || check_word(p, "type") ||
+                            check_word(p, "instance")) {
+                            advance_parser(p);
+                            if (check_word(p, "of")) advance_parser(p);
+                        }
+                        Token *type_tok = advance_parser(p);
+                        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                        args[0] = expr;
+                        args[1] = ast_string_lit(type_tok->value,
+                                                 type_tok->line, type_tok->col);
+                        ASTNode *call = make_builtin_call("__is_instance_of",
+                                                         args, 2,
+                                                         is_tok->line, is_tok->col);
+                        if (negated) {
+                            ASTNode **not_args = malloc(sizeof(ASTNode *));
+                            not_args[0] = call;
+                            expr = make_builtin_call("__not", not_args, 1,
+                                                     is_tok->line, is_tok->col);
+                        } else {
+                            expr = call;
+                        }
+                        continue;
+                    }
+                }
+            }
+        }
+
         /* --- Contains --- */
         /* "x contains Y" → __contains(x, Y) */
         if (check_word(p, "contains")) {
@@ -1881,39 +1959,100 @@ static ASTNode *parse_statement(Parser *p) {
         return node;
     }
 
-    /* Struct declaration: "a/an TYPE has [a/an] FIELD, [a/an] FIELD, and [a/an] FIELD" */
+    /* Struct declarations and extensions:
+     *   "a TYPE has FIELD, FIELD, and FIELD"           — basic declaration
+     *   "a TYPE also has FIELD, FIELD"                 — extend existing type
+     *   "a TYPE is a kind of PARENT"                   — inheritance
+     *   "a TYPE is a kind of PARENT and has FIELD..."  — inheritance + fields
+     */
     if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 2 < p->count &&
         p->tokens[p->pos + 1].type == TOK_WORD &&
-        p->tokens[p->pos + 2].type == TOK_WORD &&
-        strcmp(p->tokens[p->pos + 2].value, "has") == 0) {
-        Token *a_tok = advance_parser(p); /* consume a/an */
-        Token *type_tok = advance_parser(p); /* type name */
-        advance_parser(p); /* consume "has" */
+        p->tokens[p->pos + 2].type == TOK_WORD) {
+        const char *after_type = p->tokens[p->pos + 2].value;
+        int is_has = strcmp(after_type, "has") == 0;
+        int is_is = strcmp(after_type, "is") == 0;
+        int is_also = strcmp(after_type, "also") == 0;
+        if (!is_has && !is_is && !is_also) {
+            /* Not a struct declaration — fall through */
+        } else {
+            Token *a_tok = advance_parser(p); /* consume a/an */
+            Token *type_tok = advance_parser(p); /* type name */
 
-        int cap = 4;
-        char **fields = malloc(sizeof(char *) * cap);
-        int count = 0;
+            char *parent = NULL;
+            int additive = 0;
 
-        /* Parse field list: [a/an] FIELD [, [a/an] FIELD] [, and [a/an] FIELD] */
-        while (check_type(p, TOK_WORD)) {
-            /* Skip optional article */
-            if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
-            if (!check_type(p, TOK_WORD)) break;
-            Token *fname = advance_parser(p);
-            if (count >= cap) { cap *= 2; fields = realloc(fields, sizeof(char *) * cap); }
-            fields[count++] = str_dup_parser(fname->value);
-
-            if (check_word(p, "and") || check_type(p, TOK_COMMA)) {
-                int was_comma = check_type(p, TOK_COMMA);
-                advance_parser(p);
-                if (was_comma && check_word(p, "and")) advance_parser(p);
-            } else {
-                break;
+            if (is_also) {
+                /* "a X also has FIELD..." */
+                advance_parser(p); /* consume "also" */
+                if (check_word(p, "has")) {
+                    advance_parser(p);
+                    additive = 1;
+                } else {
+                    babel_error_at_token(current(p), "expected 'has' after 'also'");
+                }
+            } else if (is_is) {
+                /* "a X is a kind of PARENT [and has FIELD...]" */
+                advance_parser(p); /* consume "is" */
+                /* Expect "a kind of" or "a type of" */
+                if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
+                if (check_word(p, "kind") || check_word(p, "type") ||
+                    check_word(p, "subclass")) {
+                    advance_parser(p);
+                }
+                if (check_word(p, "of")) advance_parser(p);
+                /* Now expect parent type name */
+                if (!check_type(p, TOK_WORD)) {
+                    babel_error_at_token(current(p), "expected parent type name");
+                }
+                Token *parent_tok = advance_parser(p);
+                parent = str_dup_parser(parent_tok->value);
+                /* Optional "and has FIELD..." */
+                if (check_word(p, "and")) {
+                    advance_parser(p);
+                    if (check_word(p, "has")) advance_parser(p);
+                } else if (check_word(p, "with")) {
+                    advance_parser(p);
+                } else if (check_word(p, "has")) {
+                    advance_parser(p);
+                }
+            } else if (is_has) {
+                advance_parser(p); /* consume "has" */
             }
-        }
 
-        return ast_struct_decl(type_tok->value, fields, count,
-                               a_tok->line, a_tok->col);
+            int cap = 4;
+            char **fields = malloc(sizeof(char *) * cap);
+            int count = 0;
+
+            /* Parse field list (may be empty for pure inheritance) */
+            while (check_type(p, TOK_WORD) && !is_separator(p) &&
+                   !check_type(p, TOK_DOT) && !check_type(p, TOK_EOF)) {
+                /* Skip optional article */
+                if (check_word(p, "a") || check_word(p, "an")) {
+                    advance_parser(p);
+                    if (!check_type(p, TOK_WORD)) break;
+                }
+                /* If we hit a reserved word, stop */
+                if (check_word(p, "and") || check_word(p, "has") ||
+                    check_word(p, "is")) break;
+                Token *fname = advance_parser(p);
+                if (count >= cap) { cap *= 2; fields = realloc(fields, sizeof(char *) * cap); }
+                fields[count++] = str_dup_parser(fname->value);
+
+                if (check_word(p, "and") || check_type(p, TOK_COMMA)) {
+                    int was_comma = check_type(p, TOK_COMMA);
+                    advance_parser(p);
+                    if (was_comma && check_word(p, "and")) advance_parser(p);
+                } else {
+                    break;
+                }
+            }
+
+            ASTNode *node = ast_struct_decl(type_tok->value, fields, count,
+                                            a_tok->line, a_tok->col);
+            node->as.struct_decl.parent_type = parent;
+            node->as.struct_decl.additive = additive;
+            return node;
+        }
     }
 
     /* Print statement */

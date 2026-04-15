@@ -142,6 +142,8 @@ ASTNode *ast_struct_decl(const char *type_name, char **field_names, int field_co
     node->as.struct_decl.type_name = str_dup(type_name);
     node->as.struct_decl.field_names = field_names;
     node->as.struct_decl.field_count = field_count;
+    node->as.struct_decl.parent_type = NULL;
+    node->as.struct_decl.additive = 0;
     return node;
 }
 
@@ -313,6 +315,8 @@ void ast_free(ASTNode *node) {
             for (int i = 0; i < node->as.struct_decl.field_count; i++)
                 free(node->as.struct_decl.field_names[i]);
             free(node->as.struct_decl.field_names);
+            if (node->as.struct_decl.parent_type)
+                free(node->as.struct_decl.parent_type);
             break;
         case NODE_METHOD_DEF:
             free(node->as.method_def.type_name);

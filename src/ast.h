@@ -143,11 +143,15 @@ struct ASTNode {
         /* NODE_RAISE_STMT */
         struct { ASTNode *value; } raise_stmt;
 
-        /* NODE_STRUCT_DECL: "a person has a name and an age" */
+        /* NODE_STRUCT_DECL: "a person has a name and an age"
+         *                or "a student is a kind of person"
+         *                or "a student also has a school" */
         struct {
             char *type_name;
             char **field_names;
             int field_count;
+            char *parent_type;      /* NULL for root types */
+            int additive;           /* 1 if "also has" — extends existing */
         } struct_decl;
 
         /* NODE_METHOD_DEF: "to greet a person ... end" */

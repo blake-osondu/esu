@@ -689,6 +689,21 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
             emit(cg, ");\n");
         }
     }
+
+    /* Register parent relationships for inheritance */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_STRUCT_DECL) {
+            ASTNode *sd = stmts->items[i];
+            if (sd->as.struct_decl.parent_type) {
+                emit_indent(cg);
+                emit(cg, "babel_register_parent(");
+                emit_c_string(cg, sd->as.struct_decl.type_name);
+                emit(cg, ", ");
+                emit_c_string(cg, sd->as.struct_decl.parent_type);
+                emit(cg, ");\n");
+            }
+        }
+    }
     emit(cg, "\n");
 
     for (int i = 0; i < stmts->count; i++) {

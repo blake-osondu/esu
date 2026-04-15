@@ -1,0 +1,62 @@
+-- Parent class
+a person has a name and an age.
+
+to greet a person
+    display "Hello, I'm " + self.name.
+
+to describe a person
+    display self.name + " is " + self.age + " years old".
+
+-- Child class inherits from person
+a student is a kind of person.
+a student also has a school.
+
+-- Override greet for student
+to greet a student
+    display "Hi! I'm " + self.name + " from " + self.school.
+
+-- Student-specific method
+to study a student
+    display self.name + " is studying at " + self.school.
+
+-- Another child
+a teacher is a kind of person.
+a teacher also has a subject.
+
+to teach a teacher
+    display self.name + " teaches " + self.subject.
+
+-- Create instances
+alice is a new person with name "Alice" and age 30
+bob is a new student with name "Bob", age 20, and school "MIT"
+carol is a new teacher with name "Carol", age 45, and subject "Physics"
+
+-- Inherited method works on child
+display "--- Calls using bare syntax ---"
+alice greet
+bob greet       -- uses student's override
+carol greet     -- uses inherited from person
+
+-- Inherited describe (not overridden) works on student
+bob describe
+carol describe
+
+-- Child-specific method
+bob study
+carol teach
+
+-- Access inherited field
+display bob.name
+display bob.age
+display bob.school
+
+-- Type checking
+display "--- Types ---"
+display the type of alice   -- person
+display the type of bob     -- student
+display the type of carol   -- teacher
+
+-- Dot syntax too
+display "--- Dot syntax ---"
+bob.greet()
+carol.teach()
