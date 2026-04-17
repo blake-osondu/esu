@@ -1,7 +1,7 @@
-#include "babel_file.h"
-#include "babel_list.h"
-#include "babel_error.h"
-#include "babel_mem.h"
+#include "esu_file.h"
+#include "esu_list.h"
+#include "esu_error.h"
+#include "esu_mem.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,10 +9,10 @@
 #include <ctype.h>
 
 /* Expand ~ at start and $VAR / ${VAR} anywhere in a path string.
- * Returns a malloc'd string (caller must babel_free). */
+ * Returns a malloc'd string (caller must esu_free). */
 static char *expand_path_str(const char *src) {
     int cap = 256;
-    char *out = babel_alloc(cap);
+    char *out = esu_alloc(cap);
     int len = 0;
     int i = 0;
 
@@ -21,7 +21,7 @@ static char *expand_path_str(const char *src) {
         const char *home = getenv("HOME");
         if (home) {
             int hlen = strlen(home);
-            while (len + hlen + 1 > cap) { cap *= 2; out = babel_realloc(out, cap); }
+            while (len + hlen + 1 > cap) { cap *= 2; out = esu_realloc(out, cap); }
             memcpy(out + len, home, hlen);
             len += hlen;
             i = 1; /* skip the ~ */
@@ -48,7 +48,7 @@ static char *expand_path_str(const char *src) {
                 const char *val = getenv(name_buf);
                 if (val) {
                     int vlen = strlen(val);
-                    while (len + vlen + 1 > cap) { cap *= 2; out = babel_realloc(out, cap); }
+                    while (len + vlen + 1 > cap) { cap *= 2; out = esu_realloc(out, cap); }
                     memcpy(out + len, val, vlen);
                     len += vlen;
                 }
@@ -57,7 +57,7 @@ static char *expand_path_str(const char *src) {
                 continue;
             }
         }
-        if (len + 2 > cap) { cap *= 2; out = babel_realloc(out, cap); }
+        if (len + 2 > cap) { cap *= 2; out = esu_realloc(out, cap); }
         out[len++] = src[i++];
     }
     out[len] = '\0';
@@ -65,163 +65,163 @@ static char *expand_path_str(const char *src) {
 }
 
 
-BabelValue *babel_file_read(BabelValue *path) {
+EsuValue *esu_file_read(EsuValue *path) {
     if (path->type != VAL_STRING) {
-        babel_raise_msg("file path must be a string");
-        return babel_string("");
+        esu_raise_msg("file path must be a string");
+        return esu_string("");
     }
     char *p = expand_path_str(path->as.string);
     FILE *f = fopen(p, "rb");
     if (!f) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot open file: %s", p);
-        babel_free(p);
-        babel_raise_msg(msg);
-        return babel_string("");
+        esu_free(p);
+        esu_raise_msg(msg);
+        return esu_string("");
     }
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    char *buf = babel_alloc(size + 1);
+    char *buf = esu_alloc(size + 1);
     size_t got = fread(buf, 1, size, f);
     buf[got] = '\0';
     fclose(f);
-    BabelValue *result = babel_string(buf);
-    babel_free(buf);
-    babel_free(p);
+    EsuValue *result = esu_string(buf);
+    esu_free(buf);
+    esu_free(p);
     return result;
 }
 
-BabelValue *babel_file_write(BabelValue *path, BabelValue *content) {
+EsuValue *esu_file_write(EsuValue *path, EsuValue *content) {
     if (path->type != VAL_STRING) {
-        babel_raise_msg("file path must be a string");
-        return babel_nothing();
+        esu_raise_msg("file path must be a string");
+        return esu_nothing();
     }
     char *p = expand_path_str(path->as.string);
-    char *s = babel_to_cstring(content);
+    char *s = esu_to_cstring(content);
     FILE *f = fopen(p, "wb");
     if (!f) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot write to file: %s", p);
-        babel_free(p);
-        babel_free(s);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(p);
+        esu_free(s);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
     fwrite(s, 1, strlen(s), f);
     fclose(f);
-    babel_free(p);
-    babel_free(s);
-    return babel_nothing();
+    esu_free(p);
+    esu_free(s);
+    return esu_nothing();
 }
 
-BabelValue *babel_file_append(BabelValue *path, BabelValue *content) {
+EsuValue *esu_file_append(EsuValue *path, EsuValue *content) {
     if (path->type != VAL_STRING) {
-        babel_raise_msg("file path must be a string");
-        return babel_nothing();
+        esu_raise_msg("file path must be a string");
+        return esu_nothing();
     }
     char *p = expand_path_str(path->as.string);
     FILE *f = fopen(p, "ab");
     if (!f) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot append to file: %s", p);
-        babel_free(p);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(p);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
-    char *s = babel_to_cstring(content);
+    char *s = esu_to_cstring(content);
     fwrite(s, 1, strlen(s), f);
     fclose(f);
-    babel_free(s);
-    babel_free(p);
-    return babel_nothing();
+    esu_free(s);
+    esu_free(p);
+    return esu_nothing();
 }
 
-BabelValue *babel_file_exists(BabelValue *path) {
-    if (path->type != VAL_STRING) return babel_bool(0);
+EsuValue *esu_file_exists(EsuValue *path) {
+    if (path->type != VAL_STRING) return esu_bool(0);
     char *p = expand_path_str(path->as.string);
     int exists = (access(p, F_OK) == 0);
-    babel_free(p);
-    return babel_bool(exists);
+    esu_free(p);
+    return esu_bool(exists);
 }
 
-BabelValue *babel_file_delete(BabelValue *path) {
+EsuValue *esu_file_delete(EsuValue *path) {
     if (path->type != VAL_STRING) {
-        babel_raise_msg("file path must be a string");
-        return babel_nothing();
+        esu_raise_msg("file path must be a string");
+        return esu_nothing();
     }
     char *p = expand_path_str(path->as.string);
     int result = remove(p);
     if (result != 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot delete file: %s", p);
-        babel_free(p);
-        babel_raise_msg(msg);
+        esu_free(p);
+        esu_raise_msg(msg);
     }
-    babel_free(p);
-    return babel_nothing();
+    esu_free(p);
+    return esu_nothing();
 }
 
-BabelValue *babel_file_create(BabelValue *path) {
-    if (path->type != VAL_STRING) { babel_raise_msg("file path must be a string"); return babel_nothing(); }
+EsuValue *esu_file_create(EsuValue *path) {
+    if (path->type != VAL_STRING) { esu_raise_msg("file path must be a string"); return esu_nothing(); }
     char *p = expand_path_str(path->as.string);
     if (access(p, F_OK) == 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "file already exists: %s", p);
-        babel_free(p);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(p);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
     FILE *f = fopen(p, "wb");
     if (!f) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot create file: %s", p);
-        babel_free(p);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(p);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
     fclose(f);
-    babel_free(p);
-    return babel_nothing();
+    esu_free(p);
+    return esu_nothing();
 }
 
-BabelValue *babel_file_touch(BabelValue *path) {
-    if (path->type != VAL_STRING) { babel_raise_msg("file path must be a string"); return babel_nothing(); }
+EsuValue *esu_file_touch(EsuValue *path) {
+    if (path->type != VAL_STRING) { esu_raise_msg("file path must be a string"); return esu_nothing(); }
     char *p = expand_path_str(path->as.string);
     FILE *f = fopen(p, "ab");
     if (!f) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot touch file: %s", p);
-        babel_free(p);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(p);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
     fclose(f);
-    babel_free(p);
-    return babel_nothing();
+    esu_free(p);
+    return esu_nothing();
 }
 
-BabelValue *babel_file_move(BabelValue *from, BabelValue *to) {
+EsuValue *esu_file_move(EsuValue *from, EsuValue *to) {
     if (from->type != VAL_STRING || to->type != VAL_STRING) {
-        babel_raise_msg("file paths must be strings");
-        return babel_nothing();
+        esu_raise_msg("file paths must be strings");
+        return esu_nothing();
     }
     char *f = expand_path_str(from->as.string);
     char *t = expand_path_str(to->as.string);
     if (rename(f, t) != 0) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot move file from %s to %s", f, t);
-        babel_free(f); babel_free(t);
-        babel_raise_msg(msg);
+        esu_free(f); esu_free(t);
+        esu_raise_msg(msg);
     }
-    babel_free(f); babel_free(t);
-    return babel_nothing();
+    esu_free(f); esu_free(t);
+    return esu_nothing();
 }
 
-BabelValue *babel_file_copy(BabelValue *from, BabelValue *to) {
+EsuValue *esu_file_copy(EsuValue *from, EsuValue *to) {
     if (from->type != VAL_STRING || to->type != VAL_STRING) {
-        babel_raise_msg("file paths must be strings");
-        return babel_nothing();
+        esu_raise_msg("file paths must be strings");
+        return esu_nothing();
     }
     char *fp = expand_path_str(from->as.string);
     char *tp = expand_path_str(to->as.string);
@@ -229,18 +229,18 @@ BabelValue *babel_file_copy(BabelValue *from, BabelValue *to) {
     if (!src) {
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot read source file: %s", fp);
-        babel_free(fp); babel_free(tp);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(fp); esu_free(tp);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
     FILE *dst = fopen(tp, "wb");
     if (!dst) {
         fclose(src);
         char msg[512];
         snprintf(msg, sizeof(msg), "cannot write to destination: %s", tp);
-        babel_free(fp); babel_free(tp);
-        babel_raise_msg(msg);
-        return babel_nothing();
+        esu_free(fp); esu_free(tp);
+        esu_raise_msg(msg);
+        return esu_nothing();
     }
     char buf[4096];
     size_t n;
@@ -249,71 +249,71 @@ BabelValue *babel_file_copy(BabelValue *from, BabelValue *to) {
     }
     fclose(src);
     fclose(dst);
-    babel_free(fp); babel_free(tp);
-    return babel_nothing();
+    esu_free(fp); esu_free(tp);
+    return esu_nothing();
 }
 
 /* Path builtins */
 
-BabelValue *babel_home_dir(void) {
+EsuValue *esu_home_dir(void) {
     const char *h = getenv("HOME");
-    return babel_string(h ? h : "/");
+    return esu_string(h ? h : "/");
 }
 
-BabelValue *babel_current_dir(void) {
+EsuValue *esu_current_dir(void) {
     char buf[4096];
-    if (getcwd(buf, sizeof(buf))) return babel_string(buf);
-    return babel_string(".");
+    if (getcwd(buf, sizeof(buf))) return esu_string(buf);
+    return esu_string(".");
 }
 
-BabelValue *babel_temp_dir(void) {
+EsuValue *esu_temp_dir(void) {
     const char *t = getenv("TMPDIR");
     if (!t) t = getenv("TMP");
     if (!t) t = "/tmp";
     int len = strlen(t);
     if (len > 1 && t[len - 1] == '/') {
-        char *buf = babel_alloc(len);
+        char *buf = esu_alloc(len);
         memcpy(buf, t, len - 1);
         buf[len - 1] = '\0';
-        BabelValue *v = babel_string(buf);
-        babel_free(buf);
+        EsuValue *v = esu_string(buf);
+        esu_free(buf);
         return v;
     }
-    return babel_string(t);
+    return esu_string(t);
 }
 
-static BabelValue *home_subdir(const char *sub) {
+static EsuValue *home_subdir(const char *sub) {
     const char *h = getenv("HOME");
-    if (!h) return babel_string(sub);
+    if (!h) return esu_string(sub);
     int hlen = strlen(h);
     int slen = strlen(sub);
-    char *buf = babel_alloc(hlen + slen + 2);
+    char *buf = esu_alloc(hlen + slen + 2);
     memcpy(buf, h, hlen);
     buf[hlen] = '/';
     memcpy(buf + hlen + 1, sub, slen);
     buf[hlen + 1 + slen] = '\0';
-    BabelValue *v = babel_string(buf);
-    babel_free(buf);
+    EsuValue *v = esu_string(buf);
+    esu_free(buf);
     return v;
 }
 
-BabelValue *babel_desktop_dir(void)   { return home_subdir("Desktop"); }
-BabelValue *babel_downloads_dir(void) { return home_subdir("Downloads"); }
-BabelValue *babel_documents_dir(void) { return home_subdir("Documents"); }
+EsuValue *esu_desktop_dir(void)   { return home_subdir("Desktop"); }
+EsuValue *esu_downloads_dir(void) { return home_subdir("Downloads"); }
+EsuValue *esu_documents_dir(void) { return home_subdir("Documents"); }
 
-BabelValue *babel_expand_path(BabelValue *path) {
-    if (path->type != VAL_STRING) return babel_retain(path);
+EsuValue *esu_expand_path(EsuValue *path) {
+    if (path->type != VAL_STRING) return esu_retain(path);
     char *e = expand_path_str(path->as.string);
-    BabelValue *result = babel_string(e);
-    babel_free(e);
+    EsuValue *result = esu_string(e);
+    esu_free(e);
     return result;
 }
 
-BabelValue *babel_file_lines(BabelValue *path) {
-    BabelValue *content = babel_file_read(path);
-    BabelValue *result = babel_list_new();
+EsuValue *esu_file_lines(EsuValue *path) {
+    EsuValue *content = esu_file_read(path);
+    EsuValue *result = esu_list_new();
     if (content->type != VAL_STRING) {
-        babel_release(content);
+        esu_release(content);
         return result;
     }
     const char *s = content->as.string;
@@ -321,13 +321,13 @@ BabelValue *babel_file_lines(BabelValue *path) {
     while (*s) {
         if (*s == '\n') {
             int len = s - line_start;
-            char *buf = babel_alloc(len + 1);
+            char *buf = esu_alloc(len + 1);
             memcpy(buf, line_start, len);
             buf[len] = '\0';
-            BabelValue *line_val = babel_string(buf);
-            babel_list_append(result, line_val);
-            babel_release(line_val);
-            babel_free(buf);
+            EsuValue *line_val = esu_string(buf);
+            esu_list_append(result, line_val);
+            esu_release(line_val);
+            esu_free(buf);
             line_start = s + 1;
         }
         s++;
@@ -335,14 +335,14 @@ BabelValue *babel_file_lines(BabelValue *path) {
     /* Last line without trailing newline */
     if (s > line_start) {
         int len = s - line_start;
-        char *buf = babel_alloc(len + 1);
+        char *buf = esu_alloc(len + 1);
         memcpy(buf, line_start, len);
         buf[len] = '\0';
-        BabelValue *line_val = babel_string(buf);
-        babel_list_append(result, line_val);
-        babel_release(line_val);
-        babel_free(buf);
+        EsuValue *line_val = esu_string(buf);
+        esu_list_append(result, line_val);
+        esu_release(line_val);
+        esu_free(buf);
     }
-    babel_release(content);
+    esu_release(content);
     return result;
 }

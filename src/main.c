@@ -14,10 +14,10 @@
 
 static void usage(const char *prog) {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "  %s build <file.babel>          Compile to native binary\n", prog);
-    fprintf(stderr, "  %s build <file.babel> -o <out>  Compile with custom output name\n", prog);
-    fprintf(stderr, "  %s run <file.babel>             Compile and run, then clean up\n", prog);
-    fprintf(stderr, "  %s emit <file.babel>            Print generated C to stdout\n", prog);
+    fprintf(stderr, "  %s build <file.esu>          Compile to native binary\n", prog);
+    fprintf(stderr, "  %s build <file.esu> -o <out>  Compile with custom output name\n", prog);
+    fprintf(stderr, "  %s run <file.esu>             Compile and run, then clean up\n", prog);
+    fprintf(stderr, "  %s emit <file.esu>            Print generated C to stdout\n", prog);
     fprintf(stderr, "  %s repl                         Interactive REPL\n", prog);
 }
 
@@ -50,12 +50,12 @@ static Token *tokenize(const char *source, int *out_count) {
 /* Compile source code from a string to a binary. Returns 0 on success.
  * If emit_only is true, prints C to stdout instead of building a binary.
  * If recoverable is true, parse/semantic errors longjmp instead of exit. */
-static int compile_babel_src(const char *source, const char *output_path,
+static int compile_esu_src(const char *source, const char *output_path,
                              int emit_only, int recoverable) {
     if (recoverable) {
-        babel_recoverable_errors = 1;
-        if (setjmp(babel_recovery_jmp) != 0) {
-            babel_recoverable_errors = 0;
+        esu_recoverable_errors = 1;
+        if (setjmp(esu_recovery_jmp) != 0) {
+            esu_recoverable_errors = 0;
             return 1; /* Error recovered */
         }
     }
@@ -86,7 +86,7 @@ static int compile_babel_src(const char *source, const char *output_path,
         ast_free(program);
         for (int i = 0; i < token_count; i++) token_free(&tokens[i]);
         free(tokens);
-        babel_recoverable_errors = 0;
+        esu_recoverable_errors = 0;
         return 0;
     }
 
@@ -105,13 +105,13 @@ static int compile_babel_src(const char *source, const char *output_path,
     fputs(c_code, f);
     fclose(f);
 
-    const char *babel_dir = getenv("BABEL_HOME");
-    if (!babel_dir) babel_dir = ".";
+    const char *esu_dir = getenv("ESU_HOME");
+    if (!esu_dir) esu_dir = ".";
 
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
-        "cc -o %s %s -I%s/runtime -L%s/build -lbabel_runtime -lm 2>&1",
-        output_path, c_path, babel_dir, babel_dir);
+        "cc -o %s %s -I%s/runtime -L%s/build -lesu_runtime -lm 2>&1",
+        output_path, c_path, esu_dir, esu_dir);
 
     int result = system(cmd);
     if (result == 0) remove(c_path);
@@ -120,20 +120,20 @@ static int compile_babel_src(const char *source, const char *output_path,
     ast_free(program);
     for (int i = 0; i < token_count; i++) token_free(&tokens[i]);
     free(tokens);
-    babel_recoverable_errors = 0;
+    esu_recoverable_errors = 0;
     return result;
 }
 
-static int compile_babel(const char *source_path, const char *output_path, int emit_only) {
+static int compile_esu(const char *source_path, const char *output_path, int emit_only) {
     char *source = read_file(source_path);
     /* Use source_path as base name for intermediate C file */
     const char *out = emit_only ? "" : (output_path ? output_path : source_path);
     /* For emit_only with a file, the c_path uses source_path; otherwise output */
     int result;
     if (emit_only) {
-        result = compile_babel_src(source, NULL, 1, 0);
+        result = compile_esu_src(source, NULL, 1, 0);
     } else {
-        result = compile_babel_src(source, out, 0, 0);
+        result = compile_esu_src(source, out, 0, 0);
     }
     free(source);
     return result;
@@ -238,15 +238,15 @@ static char *read_line(const char *prompt) {
     return buf;
 }
 
-/* Print an explanation of a Babel topic. topic may be NULL for the
+/* Print an explanation of a Esu topic. topic may be NULL for the
  * full guide, or a specific topic name. */
 static void print_explain(const char *topic) {
     int all = (topic == NULL || *topic == '\0' ||
                strcmp(topic, "all") == 0 || strcmp(topic, "everything") == 0);
 
     if (all || strcmp(topic, "intro") == 0) {
-        printf("\n=== Welcome to Babel ===\n\n");
-        printf("Babel is a natural-language programming language. The same\n");
+        printf("\n=== Welcome to Esu ===\n\n");
+        printf("Esu is a natural-language programming language. The same\n");
         printf("operation can be written many ways — whichever reads best.\n");
         printf("Lines end with a newline, a period (.), or a comma (,).\n");
         printf("Blocks close with 'end' or a period (.).\n");
@@ -269,7 +269,7 @@ static void print_explain(const char *topic) {
 
     if (all || strcmp(topic, "basics") == 0) {
         printf("\n--- Basics: variables and values ---\n\n");
-        printf("Babel has numbers, strings, booleans, lists, maps, and 'nothing'.\n");
+        printf("Esu has numbers, strings, booleans, lists, maps, and 'nothing'.\n");
         printf("Variables are created with 'is', 'let ... be', 'set ... to', etc.\n\n");
         printf("  x is 5\n");
         printf("  let name be \"Alice\"\n");
@@ -448,7 +448,7 @@ static void print_explain(const char *topic) {
 
     if (all || strcmp(topic, "sugar") == 0) {
         printf("\n--- Natural-language sugar ---\n\n");
-        printf("Babel has dozens of ways to say the same thing:\n\n");
+        printf("Esu has dozens of ways to say the same thing:\n\n");
         printf("  • Articles: 'the length of x' works the same as 'length of x'\n");
         printf("  • Possessive: x's length = length of x\n");
         printf("  • Types: type of x  =  the type of x  =  x's type\n");
@@ -462,14 +462,14 @@ static void print_explain(const char *topic) {
 }
 
 static int run_repl(void) {
-    const char *babel_dir = getenv("BABEL_HOME");
-    if (!babel_dir) babel_dir = ".";
+    const char *esu_dir = getenv("ESU_HOME");
+    if (!esu_dir) esu_dir = ".";
 
-    /* Load history from ~/.babel_history if available */
+    /* Load history from ~/.esu_history if available */
     const char *home = getenv("HOME");
     char history_path[1024];
     if (home) {
-        snprintf(history_path, sizeof(history_path), "%s/.babel_history", home);
+        snprintf(history_path, sizeof(history_path), "%s/.esu_history", home);
         linenoiseHistoryLoad(history_path);
     } else {
         history_path[0] = '\0';
@@ -478,7 +478,7 @@ static int run_repl(void) {
     /* Allow multi-line editing within a single linenoise call */
     linenoiseSetMultiLine(1);
 
-    printf("Babel REPL — type :help for commands, :quit to exit\n");
+    printf("Esu REPL — type :help for commands, :quit to exit\n");
     printf("\n");
 
     /* Accumulated source code across the session */
@@ -498,8 +498,8 @@ static int run_repl(void) {
     input_buf[0] = '\0';
     int input_len = 0;
 
-    const char *tmp_bin = "/tmp/babel_repl_tmp";
-    const char *tmp_out = "/tmp/babel_repl_output";
+    const char *tmp_bin = "/tmp/esu_repl_tmp";
+    const char *tmp_out = "/tmp/esu_repl_output";
 
     for (;;) {
         int more = needs_more_input(input_buf);
@@ -522,7 +522,7 @@ static int run_repl(void) {
                 printf("  :quit, :q               Exit REPL\n");
                 printf("  :clear, :c              Reset session (forget all definitions)\n");
                 printf("  :show                   Print the full accumulated program\n");
-                printf("  :explain [topic]        Babel language tutorial\n");
+                printf("  :explain [topic]        Esu language tutorial\n");
                 printf("\n");
                 printf("Multi-line input: start a block (if/while/function/try) and\n");
                 printf("the prompt changes to '..' until the block is closed with 'end' or '.'\n");
@@ -579,7 +579,7 @@ static int run_repl(void) {
         candidate[src_len + input_len] = '\0';
 
         /* Compile the candidate */
-        int result = compile_babel_src(candidate, tmp_bin, 0, 1);
+        int result = compile_esu_src(candidate, tmp_bin, 0, 1);
 
         if (result != 0) {
             /* Compilation failed — discard this input, keep old accumulated */
@@ -644,7 +644,7 @@ static int run_repl(void) {
             prev_output_len = 0;
             /* Re-run the committed accumulated to re-establish baseline */
             if (src_len > 0) {
-                int r = compile_babel_src(accumulated, tmp_bin, 0, 1);
+                int r = compile_esu_src(accumulated, tmp_bin, 0, 1);
                 if (r == 0) {
                     snprintf(cmd, sizeof(cmd), "%s > %s 2>&1", tmp_bin, tmp_out);
                     system(cmd);
@@ -701,7 +701,7 @@ int main(int argc, char **argv) {
     const char *source_path = argv[2];
 
     if (strcmp(command, "emit") == 0) {
-        return compile_babel(source_path, NULL, 1);
+        return compile_esu(source_path, NULL, 1);
     }
 
     if (strcmp(command, "build") == 0) {
@@ -710,7 +710,7 @@ int main(int argc, char **argv) {
         if (argc >= 5 && strcmp(argv[3], "-o") == 0) {
             output = argv[4];
         } else {
-            /* Derive from source filename: hello.babel -> hello */
+            /* Derive from source filename: hello.esu -> hello */
             static char derived[256];
             strncpy(derived, source_path, sizeof(derived) - 1);
             char *dot = strrchr(derived, '.');
@@ -723,12 +723,12 @@ int main(int argc, char **argv) {
                 output = derived;
             }
         }
-        return compile_babel(source_path, output, 0);
+        return compile_esu(source_path, output, 0);
     }
 
     if (strcmp(command, "run") == 0) {
-        const char *tmp_output = "/tmp/babel_run_tmp";
-        int result = compile_babel(source_path, tmp_output, 0);
+        const char *tmp_output = "/tmp/esu_run_tmp";
+        int result = compile_esu(source_path, tmp_output, 0);
         if (result != 0) {
             fprintf(stderr, "Compilation failed.\n");
             return 1;

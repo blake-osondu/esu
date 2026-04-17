@@ -27,7 +27,7 @@ char *read_file(const char *path) {
     return buf;
 }
 
-char *babel_str_dup(const char *s) {
+char *esu_str_dup(const char *s) {
     char *d = malloc(strlen(s) + 1);
     strcpy(d, s);
     return d;

@@ -74,14 +74,14 @@ static int check_word(Parser *p, const char *word) {
 
 static Token *expect_type(Parser *p, TokenType type, const char *msg) {
     if (!check_type(p, type)) {
-        babel_error_at_token(current(p), "%s", msg);
+        esu_error_at_token(current(p), "%s", msg);
     }
     return advance_parser(p);
 }
 
 static void expect_word(Parser *p, const char *word, const char *msg) {
     if (!check_word(p, word)) {
-        babel_error_at_token(current(p), "%s", msg);
+        esu_error_at_token(current(p), "%s", msg);
     }
     advance_parser(p);
 }
@@ -132,7 +132,7 @@ static void expect_block_end(Parser *p, const char *context) {
     } else {
         char msg[128];
         snprintf(msg, sizeof(msg), "expected 'end' or '.' to close %s", context);
-        babel_error_at_token(current(p), "%s", msg);
+        esu_error_at_token(current(p), "%s", msg);
     }
 }
 
@@ -835,7 +835,7 @@ static ASTNode *parse_primary(Parser *p) {
         if (check_word(p, "to") || check_word(p, "as")) {
             advance_parser(p);
         } else {
-            babel_error_at_token(current(p), "expected 'to' or 'as' in conversion");
+            esu_error_at_token(current(p), "expected 'to' or 'as' in conversion");
         }
         if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
         if (check_word(p, "string") || check_word(p, "text")) {
@@ -850,7 +850,7 @@ static ASTNode *parse_primary(Parser *p) {
             args[0] = val;
             return make_builtin_call("__to_number_val", args, 1, t->line, t->col);
         }
-        babel_error_at_token(current(p), "expected 'string' or 'number' after conversion");
+        esu_error_at_token(current(p), "expected 'string' or 'number' after conversion");
     }
 
     /* Lambda / anonymous function:
@@ -984,7 +984,7 @@ static ASTNode *parse_primary(Parser *p) {
         Token *op = advance_parser(p); advance_parser(p);
         ASTNode *left = parse_comparison(p);
         if (check_word(p, "and") || check_word(p, "from")) advance_parser(p);
-        else babel_error_at_token(current(p), "expected 'and' in 'the difference of X and Y'");
+        else esu_error_at_token(current(p), "expected 'and' in 'the difference of X and Y'");
         ASTNode *right = parse_comparison(p);
         return ast_binary(left, "-", right, op->line, op->col);
     }
@@ -1199,7 +1199,7 @@ static ASTNode *parse_primary(Parser *p) {
         return expr;
     }
 
-    babel_error_at_token(tok, "expected an expression");
+    esu_error_at_token(tok, "expected an expression");
     return NULL;
 }
 
@@ -1761,7 +1761,7 @@ static void parse_block(Parser *p, NodeList *list) {
         node_list_push(list, stmt);
         if (!check_type(p, TOK_EOF) && !is_block_end(p)) {
             if (!is_separator(p)) {
-                babel_error_at_token(current(p), "expected end of line or ',' after statement");
+                esu_error_at_token(current(p), "expected end of line or ',' after statement");
             }
             skip_separators(p);
         }
@@ -1966,7 +1966,7 @@ static ASTNode *parse_for_stmt(Parser *p) {
         expect_block_end(p, "for loop");
         return node;
     } else {
-        babel_error_at_token(current(p), "expected 'from' or 'in' after for variable");
+        esu_error_at_token(current(p), "expected 'from' or 'in' after for variable");
         return NULL;
     }
 }
@@ -2184,7 +2184,7 @@ static ASTNode *parse_statement(Parser *p) {
                     advance_parser(p);
                     additive = 1;
                 } else {
-                    babel_error_at_token(current(p), "expected 'has' after 'also'");
+                    esu_error_at_token(current(p), "expected 'has' after 'also'");
                 }
             } else if (is_is) {
                 /* "a X is a kind of PARENT [and has FIELD...]" */
@@ -2198,7 +2198,7 @@ static ASTNode *parse_statement(Parser *p) {
                 if (check_word(p, "of")) advance_parser(p);
                 /* Now expect parent type name */
                 if (!check_type(p, TOK_WORD)) {
-                    babel_error_at_token(current(p), "expected parent type name");
+                    esu_error_at_token(current(p), "expected parent type name");
                 }
                 Token *parent_tok = advance_parser(p);
                 parent = str_dup_parser(parent_tok->value);
@@ -2634,7 +2634,7 @@ ASTNode *parser_parse(Parser *p) {
 
         /* After a statement, expect separator, period (top-level), or EOF */
         if (!check_type(p, TOK_EOF) && !is_separator(p) && !check_type(p, TOK_DOT)) {
-            babel_error_at_token(current(p), "expected end of line or ',' after statement");
+            esu_error_at_token(current(p), "expected end of line or ',' after statement");
         }
         /* Consume period at top level (not inside a block) */
         if (check_type(p, TOK_DOT)) advance_parser(p);

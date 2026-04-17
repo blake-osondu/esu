@@ -1,9 +1,9 @@
-#include "babel_runtime.h"
+#include "esu_runtime.h"
 
-void babel_runtime_init(void) {
+void esu_runtime_init(void) {
     /* Future: initialize GC, global state, etc. */
 }
 
-void babel_runtime_cleanup(void) {
+void esu_runtime_cleanup(void) {
     /* Future: run finalizers, free global state */
 }

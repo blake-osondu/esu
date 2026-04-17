@@ -101,7 +101,7 @@ static void emit_indent(CodeGen *cg) {
     }
 }
 
-/* Emit a Babel identifier as a valid C identifier (hyphens → underscores) */
+/* Emit a Esu identifier as a valid C identifier (hyphens → underscores) */
 static void emit_c_ident(CodeGen *cg, const char *prefix, const char *name) {
     emit(cg, "%s", prefix);
     for (const char *p = name; *p; p++) {
@@ -131,21 +131,21 @@ static void gen_statement(CodeGen *cg, ASTNode *node);
 static void gen_expression(CodeGen *cg, ASTNode *node) {
     switch (node->type) {
         case NODE_NUMBER_LIT:
-            emit(cg, "babel_number(%g)", node->as.number_lit.value);
+            emit(cg, "esu_number(%g)", node->as.number_lit.value);
             break;
 
         case NODE_STRING_LIT:
-            emit(cg, "babel_string(");
+            emit(cg, "esu_string(");
             emit_c_string(cg, node->as.string_lit.value);
             emit(cg, ")");
             break;
 
         case NODE_BOOL_LIT:
-            emit(cg, "babel_bool(%d)", node->as.bool_lit.value);
+            emit(cg, "esu_bool(%d)", node->as.bool_lit.value);
             break;
 
         case NODE_NOTHING_LIT:
-            emit(cg, "babel_nothing()");
+            emit(cg, "esu_nothing()");
             break;
 
         case NODE_IDENTIFIER:
@@ -155,19 +155,19 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         case NODE_BINARY_EXPR: {
             const char *op = node->as.binary.op;
             const char *func = NULL;
-            if (strcmp(op, "+") == 0) func = "babel_add";
-            else if (strcmp(op, "-") == 0) func = "babel_sub";
-            else if (strcmp(op, "*") == 0) func = "babel_mul";
-            else if (strcmp(op, "/") == 0) func = "babel_div";
-            else if (strcmp(op, "%") == 0) func = "babel_mod";
-            else if (strcmp(op, "==") == 0) func = "babel_eq";
-            else if (strcmp(op, "!=") == 0) func = "babel_neq";
-            else if (strcmp(op, ">") == 0) func = "babel_gt";
-            else if (strcmp(op, "<") == 0) func = "babel_lt";
-            else if (strcmp(op, ">=") == 0) func = "babel_gte";
-            else if (strcmp(op, "<=") == 0) func = "babel_lte";
-            else if (strcmp(op, "and") == 0) func = "babel_and";
-            else if (strcmp(op, "or") == 0) func = "babel_or";
+            if (strcmp(op, "+") == 0) func = "esu_add";
+            else if (strcmp(op, "-") == 0) func = "esu_sub";
+            else if (strcmp(op, "*") == 0) func = "esu_mul";
+            else if (strcmp(op, "/") == 0) func = "esu_div";
+            else if (strcmp(op, "%") == 0) func = "esu_mod";
+            else if (strcmp(op, "==") == 0) func = "esu_eq";
+            else if (strcmp(op, "!=") == 0) func = "esu_neq";
+            else if (strcmp(op, ">") == 0) func = "esu_gt";
+            else if (strcmp(op, "<") == 0) func = "esu_lt";
+            else if (strcmp(op, ">=") == 0) func = "esu_gte";
+            else if (strcmp(op, "<=") == 0) func = "esu_lte";
+            else if (strcmp(op, "and") == 0) func = "esu_and";
+            else if (strcmp(op, "or") == 0) func = "esu_or";
 
             if (func) {
                 emit(cg, "%s(", func);
@@ -182,11 +182,11 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         case NODE_UNARY_EXPR: {
             const char *op = node->as.unary.op;
             if (strcmp(op, "-") == 0) {
-                emit(cg, "babel_neg(");
+                emit(cg, "esu_neg(");
                 gen_expression(cg, node->as.unary.operand);
                 emit(cg, ")");
             } else if (strcmp(op, "not") == 0) {
-                emit(cg, "babel_not(");
+                emit(cg, "esu_not(");
                 gen_expression(cg, node->as.unary.operand);
                 emit(cg, ")");
             }
@@ -197,16 +197,16 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             const char *name = node->as.func_call.name;
             int argc = node->as.func_call.arg_count;
             if (strncmp(name, "__", 2) == 0) {
-                /* Builtin: __length → babel_length, __contains → babel_contains, etc. */
-                emit(cg, "babel%s(", name + 1); /* __X → babel_X */
+                /* Builtin: __length → esu_length, __contains → esu_contains, etc. */
+                emit(cg, "esu%s(", name + 1); /* __X → esu_X */
                 for (int i = 0; i < argc; i++) {
                     if (i > 0) emit(cg, ", ");
                     gen_expression(cg, node->as.func_call.args[i]);
                 }
                 emit(cg, ")");
             } else if (is_function_name(cg, name)) {
-                /* Direct call to a declared Babel function */
-                emit_c_ident(cg, "babel_func_", name);
+                /* Direct call to a declared Esu function */
+                emit_c_ident(cg, "esu_func_", name);
                 emit(cg, "(");
                 for (int i = 0; i < argc; i++) {
                     if (i > 0) emit(cg, ", ");
@@ -215,9 +215,9 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                 emit(cg, ")");
             } else {
                 /* Indirect call through a variable holding a function value */
-                emit(cg, "({ BabelValue *_fn = ");
+                emit(cg, "({ EsuValue *_fn = ");
                 emit_c_ident(cg, "var_", name);
-                emit(cg, "; BabelValue *_args[%d] = {", argc > 0 ? argc : 1);
+                emit(cg, "; EsuValue *_args[%d] = {", argc > 0 ? argc : 1);
                 if (argc == 0) {
                     emit(cg, "0");
                 } else {
@@ -226,16 +226,16 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                         gen_expression(cg, node->as.func_call.args[i]);
                     }
                 }
-                emit(cg, "}; babel_call(_fn, _args, %d); })", argc);
+                emit(cg, "}; esu_call(_fn, _args, %d); })", argc);
             }
             break;
         }
 
         case NODE_LIST_LIT: {
             /* Generate: create list, append each item */
-            emit(cg, "({ BabelValue *_l = babel_list_new(); ");
+            emit(cg, "({ EsuValue *_l = esu_list_new(); ");
             for (int i = 0; i < node->as.list_lit.count; i++) {
-                emit(cg, "babel_list_append(_l, ");
+                emit(cg, "esu_list_append(_l, ");
                 gen_expression(cg, node->as.list_lit.items[i]);
                 emit(cg, "); ");
             }
@@ -244,9 +244,9 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         }
 
         case NODE_MAP_LIT: {
-            emit(cg, "({ BabelValue *_m = babel_map_new(); ");
+            emit(cg, "({ EsuValue *_m = esu_map_new(); ");
             for (int i = 0; i < node->as.map_lit.count; i++) {
-                emit(cg, "babel_map_set(_m, babel_string(");
+                emit(cg, "esu_map_set(_m, esu_string(");
                 emit_c_string(cg, node->as.map_lit.keys[i]);
                 emit(cg, "), ");
                 gen_expression(cg, node->as.map_lit.values[i]);
@@ -257,7 +257,7 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         }
 
         case NODE_INDEX_EXPR:
-            emit(cg, "babel_index(");
+            emit(cg, "esu_index(");
             gen_expression(cg, node->as.index_expr.object);
             emit(cg, ", ");
             gen_expression(cg, node->as.index_expr.index);
@@ -265,20 +265,20 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             break;
 
         case NODE_MEMBER_EXPR:
-            /* x.field → babel_index(x, babel_string("field")) */
-            emit(cg, "babel_index(");
+            /* x.field → esu_index(x, esu_string("field")) */
+            emit(cg, "esu_index(");
             gen_expression(cg, node->as.member_expr.object);
-            emit(cg, ", babel_string(");
+            emit(cg, ", esu_string(");
             emit_c_string(cg, node->as.member_expr.field);
             emit(cg, "))");
             break;
 
         case NODE_METHOD_CALL: {
-            /* x.method(args) → babel_call_method(x, "method", argv, argc) */
+            /* x.method(args) → esu_call_method(x, "method", argv, argc) */
             int argc = node->as.method_call.arg_count;
-            emit(cg, "({ BabelValue *_self = ");
+            emit(cg, "({ EsuValue *_self = ");
             gen_expression(cg, node->as.method_call.object);
-            emit(cg, "; BabelValue *_args[%d] = {", argc > 0 ? argc : 1);
+            emit(cg, "; EsuValue *_args[%d] = {", argc > 0 ? argc : 1);
             if (argc == 0) {
                 emit(cg, "0");
             } else {
@@ -287,7 +287,7 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                     gen_expression(cg, node->as.method_call.args[i]);
                 }
             }
-            emit(cg, "}; babel_call_method(_self, ");
+            emit(cg, "}; esu_call_method(_self, ");
             emit_c_string(cg, node->as.method_call.method_name);
             emit(cg, ", _args, %d); })", argc);
             break;
@@ -303,12 +303,12 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
              * Note: closures don't currently capture enclosing variables;
              * the `env` arg is for future use. */
             emit_hoisted(cg,
-                "static BabelValue *babel_lambda_%d(BabelValue **_args, int _argc, BabelValue *_env) {\n"
+                "static EsuValue *esu_lambda_%d(EsuValue **_args, int _argc, EsuValue *_env) {\n"
                 "    (void)_argc; (void)_env;\n",
                 id);
             for (int i = 0; i < param_count; i++) {
                 emit_hoisted(cg,
-                    "    BabelValue *var_%s = _argc > %d ? _args[%d] : babel_nothing();\n",
+                    "    EsuValue *var_%s = _argc > %d ? _args[%d] : esu_nothing();\n",
                     node->as.lambda.params[i], i, i);
             }
             /* Body: if single expression, return it */
@@ -330,21 +330,21 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                 cg->output_cap = saved_cap;
                 emit_hoisted(cg, ";\n");
             } else {
-                emit_hoisted(cg, "    return babel_nothing();\n");
+                emit_hoisted(cg, "    return esu_nothing();\n");
             }
             emit_hoisted(cg, "}\n\n");
 
             /* At the call site: create a closure */
-            emit(cg, "babel_closure_new(babel_lambda_%d, NULL, %d)",
+            emit(cg, "esu_closure_new(esu_lambda_%d, NULL, %d)",
                  id, param_count);
             break;
         }
 
         case NODE_CALL_VALUE: {
             int argc = node->as.call_value.arg_count;
-            emit(cg, "({ BabelValue *_fn = ");
+            emit(cg, "({ EsuValue *_fn = ");
             gen_expression(cg, node->as.call_value.callee);
-            emit(cg, "; BabelValue *_args[%d] = {", argc > 0 ? argc : 1);
+            emit(cg, "; EsuValue *_args[%d] = {", argc > 0 ? argc : 1);
             if (argc == 0) {
                 emit(cg, "0");
             } else {
@@ -353,17 +353,17 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                     gen_expression(cg, node->as.call_value.args[i]);
                 }
             }
-            emit(cg, "}; babel_call(_fn, _args, %d); })", argc);
+            emit(cg, "}; esu_call(_fn, _args, %d); })", argc);
             break;
         }
 
         case NODE_CONSTRUCTOR: {
             /* Create a new struct with fields set */
-            emit(cg, "({ BabelValue *_s = babel_struct_new(");
+            emit(cg, "({ EsuValue *_s = esu_struct_new(");
             emit_c_string(cg, node->as.constructor.type_name);
             emit(cg, "); ");
             for (int i = 0; i < node->as.constructor.count; i++) {
-                emit(cg, "babel_map_set(_s, babel_string(");
+                emit(cg, "esu_map_set(_s, esu_string(");
                 emit_c_string(cg, node->as.constructor.field_names[i]);
                 emit(cg, "), ");
                 gen_expression(cg, node->as.constructor.values[i]);
@@ -374,7 +374,7 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
         }
 
         default:
-            emit(cg, "babel_nothing() /* unhandled expr */");
+            emit(cg, "esu_nothing() /* unhandled expr */");
             break;
     }
 }
@@ -389,7 +389,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
     switch (node->type) {
         case NODE_PRINT:
             emit_indent(cg);
-            emit(cg, "babel_print(");
+            emit(cg, "esu_print(");
             gen_expression(cg, node->as.print_stmt.expr);
             emit(cg, ");\n");
             break;
@@ -397,7 +397,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
         case NODE_ASSIGNMENT:
             emit_indent(cg);
             if (!is_declared(cg, node->as.assignment.name)) {
-                emit(cg, "BabelValue *");
+                emit(cg, "EsuValue *");
                 emit_c_ident(cg, "var_", node->as.assignment.name);
                 emit(cg, " = ");
                 mark_declared(cg, node->as.assignment.name);
@@ -411,7 +411,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
 
         case NODE_IF_STMT:
             emit_indent(cg);
-            emit(cg, "if (babel_is_truthy(");
+            emit(cg, "if (esu_is_truthy(");
             gen_expression(cg, node->as.if_stmt.condition);
             emit(cg, ")) {\n");
             cg->indent++;
@@ -422,7 +422,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
                 emit_indent(cg);
                 emit(cg, "} else ");
                 /* Generate the nested if without extra indent wrapper */
-                emit(cg, "if (babel_is_truthy(");
+                emit(cg, "if (esu_is_truthy(");
                 gen_expression(cg, node->as.if_stmt.else_if->as.if_stmt.condition);
                 emit(cg, ")) {\n");
                 cg->indent++;
@@ -432,7 +432,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
                 ASTNode *chain = node->as.if_stmt.else_if;
                 while (chain->as.if_stmt.else_if) {
                     emit_indent(cg);
-                    emit(cg, "} else if (babel_is_truthy(");
+                    emit(cg, "} else if (esu_is_truthy(");
                     gen_expression(cg, chain->as.if_stmt.else_if->as.if_stmt.condition);
                     emit(cg, ")) {\n");
                     cg->indent++;
@@ -465,7 +465,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
 
         case NODE_WHILE_STMT:
             emit_indent(cg);
-            emit(cg, "while (babel_is_truthy(");
+            emit(cg, "while (esu_is_truthy(");
             gen_expression(cg, node->as.while_stmt.condition);
             emit(cg, ")) {\n");
             cg->indent++;
@@ -493,9 +493,9 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             emit(cg, "for (double _i = _start; _i <= _end; _i++) {\n");
             cg->indent++;
             emit_indent(cg);
-            emit(cg, "BabelValue *");
+            emit(cg, "EsuValue *");
             emit_c_ident(cg, "var_", var);
-            emit(cg, " = babel_number(_i);\n");
+            emit(cg, " = esu_number(_i);\n");
             gen_block(cg, &node->as.for_range.body);
             cg->indent--;
             emit_indent(cg);
@@ -512,19 +512,19 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             emit(cg, "{\n");
             cg->indent++;
             emit_indent(cg);
-            emit(cg, "BabelValue *_collection = ");
+            emit(cg, "EsuValue *_collection = ");
             gen_expression(cg, node->as.for_in.collection);
             emit(cg, ";\n");
             emit_indent(cg);
             emit(cg, "if (_collection->type == %d) {\n", 4); /* VAL_LIST = 4 */
             cg->indent++;
             emit_indent(cg);
-            emit(cg, "BabelList *_list = _collection->as.list;\n");
+            emit(cg, "EsuList *_list = _collection->as.list;\n");
             emit_indent(cg);
             emit(cg, "for (int _idx = 0; _idx < _list->count; _idx++) {\n");
             cg->indent++;
             emit_indent(cg);
-            emit(cg, "BabelValue *");
+            emit(cg, "EsuValue *");
             emit_c_ident(cg, "var_", var);
             emit(cg, " = _list->items[_idx];\n");
             gen_block(cg, &node->as.for_in.body);
@@ -567,7 +567,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
                 gen_expression(cg, node->as.return_stmt.value);
                 emit(cg, ";\n");
             } else {
-                emit(cg, "return babel_nothing();\n");
+                emit(cg, "return esu_nothing();\n");
             }
             break;
 
@@ -585,21 +585,21 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
         case NODE_TRY_STMT: {
             const char *err_var = node->as.try_stmt.error_var;
             emit_indent(cg);
-            emit(cg, "babel_error_push();\n");
+            emit(cg, "esu_error_push();\n");
             emit_indent(cg);
-            emit(cg, "if (setjmp(*babel_error_frame()) == 0) {\n");
+            emit(cg, "if (setjmp(*esu_error_frame()) == 0) {\n");
             cg->indent++;
             gen_block(cg, &node->as.try_stmt.body);
             emit_indent(cg);
-            emit(cg, "babel_error_pop();\n");
+            emit(cg, "esu_error_pop();\n");
             cg->indent--;
             emit_indent(cg);
             emit(cg, "} else {\n");
             cg->indent++;
             emit_indent(cg);
-            emit(cg, "BabelValue *");
+            emit(cg, "EsuValue *");
             emit_c_ident(cg, "var_", err_var);
-            emit(cg, " = babel_get_error();\n");
+            emit(cg, " = esu_get_error();\n");
             mark_declared(cg, err_var);
             gen_block(cg, &node->as.try_stmt.catch_body);
             cg->indent--;
@@ -610,7 +610,7 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
 
         case NODE_RAISE_STMT:
             emit_indent(cg);
-            emit(cg, "babel_raise(");
+            emit(cg, "esu_raise(");
             gen_expression(cg, node->as.raise_stmt.value);
             emit(cg, ");\n");
             break;
@@ -629,17 +629,17 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
             break;
 
         case NODE_FIELD_ASSIGN:
-            /* x.field is V  →  babel_map_set(x, "field", V) (for struct/map)
-             * x[k] is V     →  babel_index_set(x, k, V) (for lists) */
+            /* x.field is V  →  esu_map_set(x, "field", V) (for struct/map)
+             * x[k] is V     →  esu_index_set(x, k, V) (for lists) */
             emit_indent(cg);
-            emit(cg, "{ BabelValue *_obj = ");
+            emit(cg, "{ EsuValue *_obj = ");
             gen_expression(cg, node->as.field_assign.object);
-            emit(cg, "; BabelValue *_key = ");
+            emit(cg, "; EsuValue *_key = ");
             gen_expression(cg, node->as.field_assign.key);
-            emit(cg, "; BabelValue *_val = ");
+            emit(cg, "; EsuValue *_val = ");
             gen_expression(cg, node->as.field_assign.value);
-            emit(cg, "; if (_obj->type == VAL_MAP) babel_map_set(_obj, _key, _val); ");
-            emit(cg, "else babel_index_set(_obj, _key, _val); }\n");
+            emit(cg, "; if (_obj->type == VAL_MAP) esu_map_set(_obj, _key, _val); ");
+            emit(cg, "else esu_index_set(_obj, _key, _val); }\n");
             break;
 
         default:
@@ -655,12 +655,12 @@ static void gen_function_def(CodeGen *cg, ASTNode *node) {
     const char *name = node->as.func_def.name;
     int param_count = node->as.func_def.param_count;
 
-    emit(cg, "BabelValue *");
-    emit_c_ident(cg, "babel_func_", name);
+    emit(cg, "EsuValue *");
+    emit_c_ident(cg, "esu_func_", name);
     emit(cg, "(");
     for (int i = 0; i < param_count; i++) {
         if (i > 0) emit(cg, ", ");
-        emit(cg, "BabelValue *");
+        emit(cg, "EsuValue *");
         emit_c_ident(cg, "var_", node->as.func_def.params[i]);
     }
     emit(cg, ") {\n");
@@ -683,7 +683,7 @@ static void gen_function_def(CodeGen *cg, ASTNode *node) {
 
     /* Implicit return nothing at end */
     emit_indent(cg);
-    emit(cg, "return babel_nothing();\n");
+    emit(cg, "return esu_nothing();\n");
 
     cg->indent = 0;
     emit(cg, "}\n\n");
@@ -698,28 +698,28 @@ static void gen_function_def(CodeGen *cg, ASTNode *node) {
     cg->declared_cap = saved_cap;
 }
 
-/* Emit a method definition as a C function accepting (BabelValue **args, int argc).
+/* Emit a method definition as a C function accepting (EsuValue **args, int argc).
  * args[0] is self. */
 static void gen_method_def(CodeGen *cg, ASTNode *node) {
     const char *type_name = node->as.method_def.type_name;
     const char *mname = node->as.method_def.name;
     int param_count = node->as.method_def.param_count;
 
-    emit(cg, "static BabelValue *babel_method_");
+    emit(cg, "static EsuValue *esu_method_");
     /* Emit type_name with hyphens -> underscores */
     for (const char *p = type_name; *p; p++) emit(cg, "%c", *p == '-' ? '_' : *p);
     emit(cg, "_");
     for (const char *p = mname; *p; p++) emit(cg, "%c", *p == '-' ? '_' : *p);
-    emit(cg, "(BabelValue **_args, int _argc) {\n");
+    emit(cg, "(EsuValue **_args, int _argc) {\n");
 
     cg->indent = 1;
     emit_indent(cg);
     emit(cg, "(void)_argc;\n");
     emit_indent(cg);
-    emit(cg, "BabelValue *var_self = _args[0];\n");
+    emit(cg, "EsuValue *var_self = _args[0];\n");
     /* Also bind the type name as a self-ish alias, e.g. "var_person = self" */
     emit_indent(cg);
-    emit(cg, "BabelValue *");
+    emit(cg, "EsuValue *");
     emit_c_ident(cg, "var_", type_name);
     emit(cg, " = _args[0];\n");
 
@@ -736,16 +736,16 @@ static void gen_method_def(CodeGen *cg, ASTNode *node) {
     /* Parameters */
     for (int i = 0; i < param_count; i++) {
         emit_indent(cg);
-        emit(cg, "BabelValue *");
+        emit(cg, "EsuValue *");
         emit_c_ident(cg, "var_", node->as.method_def.params[i]);
-        emit(cg, " = _argc > %d ? _args[%d] : babel_nothing();\n", i + 1, i + 1);
+        emit(cg, " = _argc > %d ? _args[%d] : esu_nothing();\n", i + 1, i + 1);
         mark_declared(cg, node->as.method_def.params[i]);
     }
 
     gen_block(cg, &node->as.method_def.body);
 
     emit_indent(cg);
-    emit(cg, "return babel_nothing();\n");
+    emit(cg, "return esu_nothing();\n");
 
     cg->indent = 0;
     emit(cg, "}\n\n");
@@ -762,7 +762,7 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
     NodeList *stmts = &program->as.program.stmts;
 
     /* Preamble */
-    emit(cg, "#include \"babel_runtime.h\"\n\n");
+    emit(cg, "#include \"esu_runtime.h\"\n\n");
 
     /* Register all function names so NODE_FUNCTION_CALL can distinguish
      * direct calls from calls-through-variable. */
@@ -776,12 +776,12 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
     for (int i = 0; i < stmts->count; i++) {
         if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
             ASTNode *fn = stmts->items[i];
-            emit(cg, "BabelValue *");
-            emit_c_ident(cg, "babel_func_", fn->as.func_def.name);
+            emit(cg, "EsuValue *");
+            emit_c_ident(cg, "esu_func_", fn->as.func_def.name);
             emit(cg, "(");
             for (int j = 0; j < fn->as.func_def.param_count; j++) {
                 if (j > 0) emit(cg, ", ");
-                emit(cg, "BabelValue *");
+                emit(cg, "EsuValue *");
                 emit_c_ident(cg, "var_", fn->as.func_def.params[j]);
             }
             emit(cg, ");\n");
@@ -816,19 +816,19 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
      * content right before "int main". */
 
     /* Emit wrapper closures so declared functions can be passed as values.
-     * babel_func_wrap_NAME wraps babel_func_NAME in the closure calling
-     * convention (BabelValue** args, int argc, BabelValue* env). */
+     * esu_func_wrap_NAME wraps esu_func_NAME in the closure calling
+     * convention (EsuValue** args, int argc, EsuValue* env). */
     for (int i = 0; i < stmts->count; i++) {
         if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
             ASTNode *fn = stmts->items[i];
             const char *name = fn->as.func_def.name;
             int pc = fn->as.func_def.param_count;
-            emit(cg, "static BabelValue *babel_func_wrap_");
+            emit(cg, "static EsuValue *esu_func_wrap_");
             for (const char *pp = name; *pp; pp++) emit(cg, "%c", *pp == '-' ? '_' : *pp);
-            emit(cg, "(BabelValue **_a, int _ac, BabelValue *_e) {\n");
+            emit(cg, "(EsuValue **_a, int _ac, EsuValue *_e) {\n");
             emit(cg, "    (void)_ac; (void)_e;\n");
             emit(cg, "    return ");
-            emit_c_ident(cg, "babel_func_", name);
+            emit_c_ident(cg, "esu_func_", name);
             emit(cg, "(");
             for (int j = 0; j < pc; j++) {
                 if (j > 0) emit(cg, ", ");
@@ -845,18 +845,18 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
     emit(cg, "int main(int argc, char **argv) {\n");
     cg->indent = 1;
     emit_indent(cg);
-    emit(cg, "babel_runtime_init();\n");
+    emit(cg, "esu_runtime_init();\n");
 
-    /* Create BabelValue* wrappers for all declared functions so they can
-     * be passed as values: var_triple = closure_new(babel_func_wrap_triple) */
+    /* Create EsuValue* wrappers for all declared functions so they can
+     * be passed as values: var_triple = closure_new(esu_func_wrap_triple) */
     for (int i = 0; i < stmts->count; i++) {
         if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
             ASTNode *fn = stmts->items[i];
             const char *name = fn->as.func_def.name;
             emit_indent(cg);
-            emit(cg, "BabelValue *");
+            emit(cg, "EsuValue *");
             emit_c_ident(cg, "var_", name);
-            emit(cg, " = babel_closure_new(babel_func_wrap_");
+            emit(cg, " = esu_closure_new(esu_func_wrap_");
             for (const char *pp = name; *pp; pp++) emit(cg, "%c", *pp == '-' ? '_' : *pp);
             emit(cg, ", NULL, %d);\n", fn->as.func_def.param_count);
             mark_declared(cg, name);
@@ -868,11 +868,11 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
         if (stmts->items[i]->type == NODE_METHOD_DEF) {
             ASTNode *m = stmts->items[i];
             emit_indent(cg);
-            emit(cg, "babel_register_method(");
+            emit(cg, "esu_register_method(");
             emit_c_string(cg, m->as.method_def.type_name);
             emit(cg, ", ");
             emit_c_string(cg, m->as.method_def.name);
-            emit(cg, ", babel_method_");
+            emit(cg, ", esu_method_");
             for (const char *p = m->as.method_def.type_name; *p; p++)
                 emit(cg, "%c", *p == '-' ? '_' : *p);
             emit(cg, "_");
@@ -888,7 +888,7 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
             ASTNode *sd = stmts->items[i];
             if (sd->as.struct_decl.parent_type) {
                 emit_indent(cg);
-                emit(cg, "babel_register_parent(");
+                emit(cg, "esu_register_parent(");
                 emit_c_string(cg, sd->as.struct_decl.type_name);
                 emit(cg, ", ");
                 emit_c_string(cg, sd->as.struct_decl.parent_type);
@@ -908,7 +908,7 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
 
     emit(cg, "\n");
     emit_indent(cg);
-    emit(cg, "babel_runtime_cleanup();\n");
+    emit(cg, "esu_runtime_cleanup();\n");
     emit_indent(cg);
     emit(cg, "return 0;\n");
     cg->indent = 0;

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake -B build -S .)",
+      "Bash(cmake --build build)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/print_variants.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit examples/arithmetic.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/arithmetic.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit examples/colloquial.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/colloquial.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/fizzbuzz.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit examples/fibonacci.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/fibonacci.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/functions.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit examples/functions.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/natural_assign.babel)",
+      "Bash(cat)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit /tmp/test_postassign.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit /tmp/test_simple.babel)",
+      "Skill(commit)",
+      "Skill(commit:*)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/oneliners.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/conjugation.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/strings.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/string_sugar.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit /tmp/test_conv.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit /tmp/test_conv2.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit /tmp/test_full.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel emit /tmp/test_as.babel)",
+      "Bash(BABEL_HOME=/Users/osonduagwueki/Desktop/Development/Babel ./build/babel run examples/try_oneliners.babel)"
+    ]
+  }
+}

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(Babel C)
+project(Esu C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -8,25 +8,25 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # Runtime static library
-add_library(babel_runtime STATIC
-    runtime/babel_runtime.c
-    runtime/babel_value.c
-    runtime/babel_mem.c
-    runtime/babel_io.c
-    runtime/babel_ops.c
-    runtime/babel_string.c
-    runtime/babel_list.c
-    runtime/babel_map.c
-    runtime/babel_error.c
-    runtime/babel_math.c
-    runtime/babel_file.c
-    runtime/babel_method.c
+add_library(esu_runtime STATIC
+    runtime/esu_runtime.c
+    runtime/esu_value.c
+    runtime/esu_mem.c
+    runtime/esu_io.c
+    runtime/esu_ops.c
+    runtime/esu_string.c
+    runtime/esu_list.c
+    runtime/esu_map.c
+    runtime/esu_error.c
+    runtime/esu_math.c
+    runtime/esu_file.c
+    runtime/esu_method.c
 )
-target_link_libraries(babel_runtime PRIVATE m)
-target_include_directories(babel_runtime PUBLIC ${CMAKE_SOURCE_DIR}/runtime)
+target_link_libraries(esu_runtime PRIVATE m)
+target_include_directories(esu_runtime PUBLIC ${CMAKE_SOURCE_DIR}/runtime)
 
-# Babel compiler executable
-add_executable(babel
+# Esu compiler executable
+add_executable(esu
     src/main.c
     src/lexer.c
     src/normalizer.c
@@ -38,7 +38,7 @@ add_executable(babel
     src/util.c
     third_party/linenoise/linenoise.c
 )
-target_include_directories(babel PRIVATE
+target_include_directories(esu PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/third_party/linenoise
 )
@@ -49,6 +49,6 @@ set_source_files_properties(third_party/linenoise/linenoise.c
 )
 
 # Install the runtime headers/lib so compiled programs can link against it
-install(TARGETS babel_runtime ARCHIVE DESTINATION lib)
-install(DIRECTORY runtime/ DESTINATION include/babel FILES_MATCHING PATTERN "*.h")
-install(TARGETS babel RUNTIME DESTINATION bin)
+install(TARGETS esu_runtime ARCHIVE DESTINATION lib)
+install(DIRECTORY runtime/ DESTINATION include/esu FILES_MATCHING PATTERN "*.h")
+install(TARGETS esu RUNTIME DESTINATION bin)

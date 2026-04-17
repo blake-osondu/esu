@@ -1,7 +1,7 @@
 build/
 *.o
 *.a
-*.babel.c
+*.esu.c
 output
 /hello
 *.dSYM/
