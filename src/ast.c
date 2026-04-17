@@ -190,6 +190,23 @@ ASTNode *ast_field_assign(ASTNode *object, ASTNode *key, ASTNode *value, int lin
     return node;
 }
 
+ASTNode *ast_lambda(char **params, int param_count, ASTNode *body_expr, int line, int col) {
+    ASTNode *node = ast_new(NODE_LAMBDA, line, col);
+    node->as.lambda.params = params;
+    node->as.lambda.param_count = param_count;
+    node_list_init(&node->as.lambda.body);
+    node->as.lambda.body_expr = body_expr;
+    return node;
+}
+
+ASTNode *ast_call_value(ASTNode *callee, ASTNode **args, int arg_count, int line, int col) {
+    ASTNode *node = ast_new(NODE_CALL_VALUE, line, col);
+    node->as.call_value.callee = callee;
+    node->as.call_value.args = args;
+    node->as.call_value.arg_count = arg_count;
+    return node;
+}
+
 void ast_free(ASTNode *node) {
     if (!node) return;
 
@@ -353,6 +370,21 @@ void ast_free(ASTNode *node) {
             ast_free(node->as.field_assign.object);
             ast_free(node->as.field_assign.key);
             ast_free(node->as.field_assign.value);
+            break;
+        case NODE_LAMBDA:
+            for (int i = 0; i < node->as.lambda.param_count; i++)
+                free(node->as.lambda.params[i]);
+            free(node->as.lambda.params);
+            for (int i = 0; i < node->as.lambda.body.count; i++)
+                ast_free(node->as.lambda.body.items[i]);
+            free(node->as.lambda.body.items);
+            ast_free(node->as.lambda.body_expr);
+            break;
+        case NODE_CALL_VALUE:
+            ast_free(node->as.call_value.callee);
+            for (int i = 0; i < node->as.call_value.arg_count; i++)
+                ast_free(node->as.call_value.args[i]);
+            free(node->as.call_value.args);
             break;
     }
 

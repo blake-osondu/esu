@@ -21,6 +21,7 @@ static int is_truthy(BabelValue *v) {
         case VAL_STRING:  return v->as.string[0] != '\0';
         case VAL_LIST:    return v->as.list->count > 0;
         case VAL_MAP:     return v->as.map->count > 0;
+        case VAL_FUNCTION: return 1;
     }
     return 0;
 }
@@ -85,6 +86,7 @@ BabelValue *babel_eq(BabelValue *a, BabelValue *b) {
         case VAL_BOOL:    return babel_bool(a->as.boolean == b->as.boolean);
         case VAL_LIST:    return babel_bool(a->as.list == b->as.list); /* reference equality */
         case VAL_MAP:     return babel_bool(a->as.map == b->as.map);
+        case VAL_FUNCTION: return babel_bool(a->as.closure == b->as.closure);
     }
     return babel_bool(0);
 }

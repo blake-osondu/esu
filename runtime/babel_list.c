@@ -123,6 +123,49 @@ BabelValue *babel_list_joined(BabelValue *list_val, BabelValue *separator) {
     return result;
 }
 
+#include "babel_ops.h"  /* for truthiness */
+
+BabelValue *babel_map_list(BabelValue *list_val, BabelValue *fn) {
+    BabelValue *result = babel_list_new();
+    if (list_val->type != VAL_LIST) return result;
+    BabelList *list = list_val->as.list;
+    for (int i = 0; i < list->count; i++) {
+        BabelValue *arg[1] = { list->items[i] };
+        BabelValue *transformed = babel_call(fn, arg, 1);
+        babel_list_append(result, transformed);
+        babel_release(transformed);
+    }
+    return result;
+}
+
+BabelValue *babel_filter_list(BabelValue *list_val, BabelValue *fn) {
+    BabelValue *result = babel_list_new();
+    if (list_val->type != VAL_LIST) return result;
+    BabelList *list = list_val->as.list;
+    for (int i = 0; i < list->count; i++) {
+        BabelValue *arg[1] = { list->items[i] };
+        BabelValue *ok = babel_call(fn, arg, 1);
+        if (babel_is_truthy(ok)) {
+            babel_list_append(result, list->items[i]);
+        }
+        babel_release(ok);
+    }
+    return result;
+}
+
+BabelValue *babel_reduce_list(BabelValue *list_val, BabelValue *fn, BabelValue *init) {
+    if (list_val->type != VAL_LIST) return babel_retain(init);
+    BabelList *list = list_val->as.list;
+    BabelValue *acc = babel_retain(init);
+    for (int i = 0; i < list->count; i++) {
+        BabelValue *args[2] = { acc, list->items[i] };
+        BabelValue *next = babel_call(fn, args, 2);
+        babel_release(acc);
+        acc = next;
+    }
+    return acc;
+}
+
 BabelValue *babel_list_slice(BabelValue *list_val, BabelValue *start, BabelValue *end) {
     BabelValue *result = babel_list_new();
     if (list_val->type != VAL_LIST) return result;

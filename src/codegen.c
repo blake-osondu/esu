@@ -13,6 +13,51 @@ void codegen_init(CodeGen *cg) {
     cg->declared_cap = 32;
     cg->declared_vars = malloc(sizeof(char *) * cg->declared_cap);
     cg->declared_count = 0;
+    cg->function_names_cap = 16;
+    cg->function_names = malloc(sizeof(char *) * cg->function_names_cap);
+    cg->function_names_count = 0;
+    cg->lambda_counter = 0;
+    cg->hoisted_cap = 4096;
+    cg->hoisted = malloc(cg->hoisted_cap);
+    cg->hoisted[0] = '\0';
+    cg->hoisted_len = 0;
+}
+
+static void register_function_name(CodeGen *cg, const char *name) {
+    for (int i = 0; i < cg->function_names_count; i++) {
+        if (strcmp(cg->function_names[i], name) == 0) return;
+    }
+    if (cg->function_names_count >= cg->function_names_cap) {
+        cg->function_names_cap *= 2;
+        cg->function_names = realloc(cg->function_names,
+                                     sizeof(char *) * cg->function_names_cap);
+    }
+    cg->function_names[cg->function_names_count] = malloc(strlen(name) + 1);
+    strcpy(cg->function_names[cg->function_names_count], name);
+    cg->function_names_count++;
+}
+
+static int is_function_name(CodeGen *cg, const char *name) {
+    for (int i = 0; i < cg->function_names_count; i++) {
+        if (strcmp(cg->function_names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+/* Append to hoisted buffer (for lambda function definitions) */
+static void emit_hoisted(CodeGen *cg, const char *fmt, ...) {
+    char buf[2048];
+    va_list args;
+    va_start(args, fmt);
+    int len = vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    while (cg->hoisted_len + len + 1 > cg->hoisted_cap) {
+        cg->hoisted_cap *= 2;
+        cg->hoisted = realloc(cg->hoisted, cg->hoisted_cap);
+    }
+    memcpy(cg->hoisted + cg->hoisted_len, buf, len);
+    cg->hoisted_len += len;
+    cg->hoisted[cg->hoisted_len] = '\0';
 }
 
 static int is_declared(CodeGen *cg, const char *name) {
@@ -150,18 +195,39 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
 
         case NODE_FUNCTION_CALL: {
             const char *name = node->as.func_call.name;
+            int argc = node->as.func_call.arg_count;
             if (strncmp(name, "__", 2) == 0) {
                 /* Builtin: __length → babel_length, __contains → babel_contains, etc. */
                 emit(cg, "babel%s(", name + 1); /* __X → babel_X */
-            } else {
+                for (int i = 0; i < argc; i++) {
+                    if (i > 0) emit(cg, ", ");
+                    gen_expression(cg, node->as.func_call.args[i]);
+                }
+                emit(cg, ")");
+            } else if (is_function_name(cg, name)) {
+                /* Direct call to a declared Babel function */
                 emit_c_ident(cg, "babel_func_", name);
                 emit(cg, "(");
+                for (int i = 0; i < argc; i++) {
+                    if (i > 0) emit(cg, ", ");
+                    gen_expression(cg, node->as.func_call.args[i]);
+                }
+                emit(cg, ")");
+            } else {
+                /* Indirect call through a variable holding a function value */
+                emit(cg, "({ BabelValue *_fn = ");
+                emit_c_ident(cg, "var_", name);
+                emit(cg, "; BabelValue *_args[%d] = {", argc > 0 ? argc : 1);
+                if (argc == 0) {
+                    emit(cg, "0");
+                } else {
+                    for (int i = 0; i < argc; i++) {
+                        if (i > 0) emit(cg, ", ");
+                        gen_expression(cg, node->as.func_call.args[i]);
+                    }
+                }
+                emit(cg, "}; babel_call(_fn, _args, %d); })", argc);
             }
-            for (int i = 0; i < node->as.func_call.arg_count; i++) {
-                if (i > 0) emit(cg, ", ");
-                gen_expression(cg, node->as.func_call.args[i]);
-            }
-            emit(cg, ")");
             break;
         }
 
@@ -224,6 +290,70 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
             emit(cg, "}; babel_call_method(_self, ");
             emit_c_string(cg, node->as.method_call.method_name);
             emit(cg, ", _args, %d); })", argc);
+            break;
+        }
+
+        case NODE_LAMBDA: {
+            /* Assign a unique ID and emit the function body to the hoisted
+             * buffer. At this expression site, emit a closure creation. */
+            int id = cg->lambda_counter++;
+            int param_count = node->as.lambda.param_count;
+
+            /* Emit the function to hoisted storage.
+             * Note: closures don't currently capture enclosing variables;
+             * the `env` arg is for future use. */
+            emit_hoisted(cg,
+                "static BabelValue *babel_lambda_%d(BabelValue **_args, int _argc, BabelValue *_env) {\n"
+                "    (void)_argc; (void)_env;\n",
+                id);
+            for (int i = 0; i < param_count; i++) {
+                emit_hoisted(cg,
+                    "    BabelValue *var_%s = _argc > %d ? _args[%d] : babel_nothing();\n",
+                    node->as.lambda.params[i], i, i);
+            }
+            /* Body: if single expression, return it */
+            if (node->as.lambda.body_expr) {
+                emit_hoisted(cg, "    return ");
+                /* Temporarily redirect main output to hoisted to emit expression */
+                char *saved_output = cg->output;
+                int saved_len = cg->output_len;
+                int saved_cap = cg->output_cap;
+                cg->output = cg->hoisted;
+                cg->output_len = cg->hoisted_len;
+                cg->output_cap = cg->hoisted_cap;
+                gen_expression(cg, node->as.lambda.body_expr);
+                cg->hoisted = cg->output;
+                cg->hoisted_len = cg->output_len;
+                cg->hoisted_cap = cg->output_cap;
+                cg->output = saved_output;
+                cg->output_len = saved_len;
+                cg->output_cap = saved_cap;
+                emit_hoisted(cg, ";\n");
+            } else {
+                emit_hoisted(cg, "    return babel_nothing();\n");
+            }
+            emit_hoisted(cg, "}\n\n");
+
+            /* At the call site: create a closure */
+            emit(cg, "babel_closure_new(babel_lambda_%d, NULL, %d)",
+                 id, param_count);
+            break;
+        }
+
+        case NODE_CALL_VALUE: {
+            int argc = node->as.call_value.arg_count;
+            emit(cg, "({ BabelValue *_fn = ");
+            gen_expression(cg, node->as.call_value.callee);
+            emit(cg, "; BabelValue *_args[%d] = {", argc > 0 ? argc : 1);
+            if (argc == 0) {
+                emit(cg, "0");
+            } else {
+                for (int i = 0; i < argc; i++) {
+                    if (i > 0) emit(cg, ", ");
+                    gen_expression(cg, node->as.call_value.args[i]);
+                }
+            }
+            emit(cg, "}; babel_call(_fn, _args, %d); })", argc);
             break;
         }
 
@@ -634,6 +764,14 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
     /* Preamble */
     emit(cg, "#include \"babel_runtime.h\"\n\n");
 
+    /* Register all function names so NODE_FUNCTION_CALL can distinguish
+     * direct calls from calls-through-variable. */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
+            register_function_name(cg, stmts->items[i]->as.func_def.name);
+        }
+    }
+
     /* Forward declarations for all functions */
     for (int i = 0; i < stmts->count; i++) {
         if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
@@ -665,11 +803,65 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
         }
     }
 
+    /* Emit hoisted lambda definitions (accumulated during expression
+     * generation). We do a first pass over statements to trigger lambda
+     * registration — but since lambdas are expressions generated when
+     * we encounter them, we need to do the main pass first, collecting
+     * hoisted output, then splice it in. We handle this by generating
+     * main into a temporary and hoisted lambdas into cg->hoisted. */
+
+    /* Placeholder — we'll emit hoisted lambdas between method defs and main
+     * by pre-generating main's body into a separate buffer. Simpler: we
+     * generate main as usual, then at the end, we splice the hoisted
+     * content right before "int main". */
+
+    /* Emit wrapper closures so declared functions can be passed as values.
+     * babel_func_wrap_NAME wraps babel_func_NAME in the closure calling
+     * convention (BabelValue** args, int argc, BabelValue* env). */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
+            ASTNode *fn = stmts->items[i];
+            const char *name = fn->as.func_def.name;
+            int pc = fn->as.func_def.param_count;
+            emit(cg, "static BabelValue *babel_func_wrap_");
+            for (const char *pp = name; *pp; pp++) emit(cg, "%c", *pp == '-' ? '_' : *pp);
+            emit(cg, "(BabelValue **_a, int _ac, BabelValue *_e) {\n");
+            emit(cg, "    (void)_ac; (void)_e;\n");
+            emit(cg, "    return ");
+            emit_c_ident(cg, "babel_func_", name);
+            emit(cg, "(");
+            for (int j = 0; j < pc; j++) {
+                if (j > 0) emit(cg, ", ");
+                emit(cg, "_a[%d]", j);
+            }
+            emit(cg, ");\n}\n\n");
+        }
+    }
+
     /* Main function with non-function/method statements */
+    /* Record position for later splicing of hoisted content */
+    int pre_main_pos = cg->output_len;
+
     emit(cg, "int main(int argc, char **argv) {\n");
     cg->indent = 1;
     emit_indent(cg);
     emit(cg, "babel_runtime_init();\n");
+
+    /* Create BabelValue* wrappers for all declared functions so they can
+     * be passed as values: var_triple = closure_new(babel_func_wrap_triple) */
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_FUNCTION_DEF) {
+            ASTNode *fn = stmts->items[i];
+            const char *name = fn->as.func_def.name;
+            emit_indent(cg);
+            emit(cg, "BabelValue *");
+            emit_c_ident(cg, "var_", name);
+            emit(cg, " = babel_closure_new(babel_func_wrap_");
+            for (const char *pp = name; *pp; pp++) emit(cg, "%c", *pp == '-' ? '_' : *pp);
+            emit(cg, ", NULL, %d);\n", fn->as.func_def.param_count);
+            mark_declared(cg, name);
+        }
+    }
 
     /* Register methods at startup */
     for (int i = 0; i < stmts->count; i++) {
@@ -721,6 +913,23 @@ void codegen_generate(CodeGen *cg, ASTNode *program) {
     emit(cg, "return 0;\n");
     cg->indent = 0;
     emit(cg, "}\n");
+
+    /* Splice hoisted lambda definitions in before main() */
+    if (cg->hoisted_len > 0) {
+        int new_len = cg->output_len + cg->hoisted_len;
+        while (new_len + 1 > cg->output_cap) {
+            cg->output_cap *= 2;
+            cg->output = realloc(cg->output, cg->output_cap);
+        }
+        /* Shift content from pre_main_pos onward to make room for hoisted */
+        int tail_len = cg->output_len - pre_main_pos;
+        memmove(cg->output + pre_main_pos + cg->hoisted_len,
+                cg->output + pre_main_pos,
+                tail_len);
+        memcpy(cg->output + pre_main_pos, cg->hoisted, cg->hoisted_len);
+        cg->output_len = new_len;
+        cg->output[cg->output_len] = '\0';
+    }
 }
 
 char *codegen_get_output(CodeGen *cg) {
@@ -730,6 +939,13 @@ char *codegen_get_output(CodeGen *cg) {
 void codegen_free(CodeGen *cg) {
     free(cg->output);
     cg->output = NULL;
+    free(cg->hoisted);
+    cg->hoisted = NULL;
+    for (int i = 0; i < cg->function_names_count; i++) {
+        free(cg->function_names[i]);
+    }
+    free(cg->function_names);
+    cg->function_names = NULL;
     for (int i = 0; i < cg->declared_count; i++) {
         free(cg->declared_vars[i]);
     }

@@ -435,10 +435,11 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             continue;
         }
 
-        /* Division: "divide" / "dividing" / "over" → / (after expr) */
+        /* Division: "divide" / "dividing" → / (after expr)
+         * Note: "over" removed as division alias to avoid conflict with
+         * "map FN over LIST" higher-order syntax. Use "divided by" instead. */
         if ((is_word(tokens, i, count, "divide") ||
-             is_word(tokens, i, count, "dividing") ||
-             is_word(tokens, i, count, "over")) &&
+             is_word(tokens, i, count, "dividing")) &&
             last_output_is_expr_end(&out)) {
             tlist_push(&out, syn_op(TOK_SLASH, "/", line, col));
             i++;

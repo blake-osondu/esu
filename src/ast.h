@@ -33,6 +33,8 @@ typedef enum {
     NODE_MEMBER_EXPR,       /* x.field — read-only */
     NODE_METHOD_CALL,       /* x.method(args) */
     NODE_FIELD_ASSIGN,      /* x.field is V  or  x[k] is V */
+    NODE_LAMBDA,            /* anonymous function */
+    NODE_CALL_VALUE,        /* call a function value (not by name) */
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -191,6 +193,21 @@ struct ASTNode {
             ASTNode *key;       /* string expr for .field, any expr for [k] */
             ASTNode *value;
         } field_assign;
+
+        /* NODE_LAMBDA: anonymous function */
+        struct {
+            char **params;
+            int param_count;
+            NodeList body;        /* block of statements (if multi) */
+            ASTNode *body_expr;   /* single-expression body (if present) */
+        } lambda;
+
+        /* NODE_CALL_VALUE: call a function value (not by name) */
+        struct {
+            ASTNode *callee;
+            ASTNode **args;
+            int arg_count;
+        } call_value;
     } as;
 };
 
@@ -217,6 +234,8 @@ ASTNode *ast_constructor(const char *type_name, char **field_names, ASTNode **va
 ASTNode *ast_member_expr(ASTNode *object, const char *field, int line, int col);
 ASTNode *ast_method_call(ASTNode *object, const char *method_name, ASTNode **args, int arg_count, int line, int col);
 ASTNode *ast_field_assign(ASTNode *object, ASTNode *key, ASTNode *value, int line, int col);
+ASTNode *ast_lambda(char **params, int param_count, ASTNode *body_expr, int line, int col);
+ASTNode *ast_call_value(ASTNode *callee, ASTNode **args, int arg_count, int line, int col);
 
 /* NodeList helpers */
 void node_list_init(NodeList *list);

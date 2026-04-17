@@ -145,6 +145,7 @@ static ASTNode *parse_unary(Parser *p);
 static ASTNode *parse_file_path(Parser *p);
 static int looks_like_past_tense(Parser *p);
 static char *str_dup_parser(const char *s);
+static void parse_param_list(Parser *p, char ***out_params, int *out_count);
 static ASTNode *parse_statement(Parser *p);
 static void parse_block(Parser *p, NodeList *list);
 
@@ -169,6 +170,158 @@ static ASTNode *parse_primary(Parser *p) {
     Token *tok = current(p);
 
     /* ===== BUILTIN PREFIX EXPRESSIONS ===== */
+
+    /* --- Higher-order list operations --- */
+    /* "map FN over LIST" → __map_list(LIST, FN) */
+    if (check_word(p, "map") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* consume "map" */
+        ASTNode *fn = parse_comparison(p);
+        if (check_word(p, "over") || check_word(p, "across")) {
+            advance_parser(p);
+            ASTNode *list = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = list; args[1] = fn;
+            return make_builtin_call("__map_list", args, 2, t->line, t->col);
+        }
+        /* Not a map expression — restore */
+        ast_free(fn);
+        p->pos = saved;
+    }
+
+    /* "transform every item in LIST using FN"
+     * "transform every item in LIST with FN" */
+    if (check_word(p, "transform") && p->pos + 3 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "every") == 0) {
+        Token *t = advance_parser(p); /* transform */
+        advance_parser(p); /* every */
+        if (check_type(p, TOK_WORD)) advance_parser(p); /* noun e.g. "item" */
+        if (check_word(p, "in") || check_word(p, "of")) advance_parser(p);
+        ASTNode *list = parse_comparison(p);
+        if (check_word(p, "using") || check_word(p, "with") || check_word(p, "by")) {
+            advance_parser(p);
+        }
+        ASTNode *fn = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = list; args[1] = fn;
+        return make_builtin_call("__map_list", args, 2, t->line, t->col);
+    }
+
+    /* Filter LIST — supports many forms:
+     *   filter LIST with FN              (predicate-first)
+     *   filter LIST by FN
+     *   filter LIST using FN
+     *   filter LIST where every ITEM FN  ("every item is_positive")
+     *   filter LIST where each ITEM FN
+     *   filter LIST where ITEM FN        ("where x is_positive")
+     * The noun after "where every/each" is a noise word; the actual predicate
+     * is the function that follows. */
+    if (check_word(p, "filter") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        ASTNode *list = parse_comparison(p);
+        if (check_word(p, "with") || check_word(p, "by") || check_word(p, "using")) {
+            advance_parser(p);
+            ASTNode *fn = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = list; args[1] = fn;
+            return make_builtin_call("__filter_list", args, 2, t->line, t->col);
+        }
+        if (check_word(p, "where")) {
+            advance_parser(p); /* consume "where" */
+            int had_every = 0;
+            /* Optional "every" / "each" */
+            if (check_word(p, "every") || check_word(p, "each")) {
+                advance_parser(p);
+                had_every = 1;
+            }
+            /* If we saw "every/each", the next word is the noun placeholder
+             * (e.g., "item") — skip it. Otherwise, leave the word for parse. */
+            if (had_every && check_type(p, TOK_WORD)) {
+                advance_parser(p); /* skip noun like "item", "number", etc. */
+            }
+            /* Optional "is" / "matches" connector */
+            if (check_word(p, "is") || check_word(p, "matches")) advance_parser(p);
+            ASTNode *fn = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = list; args[1] = fn;
+            return make_builtin_call("__filter_list", args, 2, t->line, t->col);
+        }
+        ast_free(list);
+        p->pos = saved;
+    }
+    /* "keep [only] items [from/in/of] LIST where [every/each ITEM [is]] FN"
+     * Examples:
+     *   keep items from numbers where is-even
+     *   keep only items in numbers where every item is-positive
+     *   keep items in numbers where each number matches is-big */
+    if (check_word(p, "keep") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        /* optional "only" */
+        if (check_word(p, "only")) advance_parser(p);
+        /* optional "items" or similar noun */
+        if (check_type(p, TOK_WORD) &&
+            (strcmp(current(p)->value, "items") == 0 ||
+             strcmp(current(p)->value, "elements") == 0 ||
+             strcmp(current(p)->value, "values") == 0)) {
+            advance_parser(p);
+        }
+        if (check_word(p, "from") || check_word(p, "in") || check_word(p, "of")) {
+            advance_parser(p);
+            ASTNode *list = parse_comparison(p);
+            if (check_word(p, "where") || check_word(p, "matching") ||
+                check_word(p, "that")) {
+                advance_parser(p);
+                /* optional "match/matches" after "that" */
+                if (check_word(p, "match") || check_word(p, "matches")) advance_parser(p);
+                int had_every = 0;
+                if (check_word(p, "every") || check_word(p, "each")) {
+                    advance_parser(p);
+                    had_every = 1;
+                }
+                /* Skip noun placeholder if "every/each" was used */
+                if (had_every && check_type(p, TOK_WORD)) advance_parser(p);
+                if (check_word(p, "is") || check_word(p, "matches")) advance_parser(p);
+                ASTNode *fn = parse_postfix(p);
+                ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                args[0] = list; args[1] = fn;
+                return make_builtin_call("__filter_list", args, 2, t->line, t->col);
+            }
+            ast_free(list);
+        }
+        p->pos = saved;
+    }
+
+    /* "reduce LIST using FN starting at INIT"
+     * "fold LIST using FN starting with INIT"
+     * "reduce LIST with FN starting at INIT" */
+    if ((check_word(p, "reduce") || check_word(p, "fold")) && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        ASTNode *list = parse_comparison(p);
+        if (check_word(p, "using") || check_word(p, "with") || check_word(p, "by")) {
+            advance_parser(p);
+            ASTNode *fn = parse_comparison(p);
+            ASTNode *init = NULL;
+            if (check_word(p, "starting")) {
+                advance_parser(p);
+                if (check_word(p, "at") || check_word(p, "with") ||
+                    check_word(p, "from")) advance_parser(p);
+                init = parse_postfix(p);
+            } else if (check_word(p, "from")) {
+                advance_parser(p);
+                init = parse_postfix(p);
+            }
+            if (!init) init = ast_number_lit(0, t->line, t->col);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+            args[0] = list; args[1] = fn; args[2] = init;
+            return make_builtin_call("__reduce_list", args, 3, t->line, t->col);
+        }
+        ast_free(list);
+        p->pos = saved;
+    }
 
     /* --- Length --- */
     /* "length of X" / "size of X" → __length(X) */
@@ -698,6 +851,48 @@ static ASTNode *parse_primary(Parser *p) {
             return make_builtin_call("__to_number_val", args, 1, t->line, t->col);
         }
         babel_error_at_token(current(p), "expected 'string' or 'number' after conversion");
+    }
+
+    /* Lambda / anonymous function:
+     *   "a function of X that returns EXPR"
+     *   "a function of X and Y that returns EXPR"
+     *   "a function taking X, return EXPR"
+     * Must check before constructor (also starts with "a"). */
+    if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "function") == 0) {
+        int saved = p->pos;
+        Token *a_tok = advance_parser(p); /* consume a/an */
+        advance_parser(p); /* consume 'function' */
+
+        /* Optional "of X and Y" or "taking X and Y" */
+        char **params = NULL;
+        int param_count = 0;
+        if (check_word(p, "of") || check_word(p, "taking") || check_word(p, "with")) {
+            advance_parser(p);
+            parse_param_list(p, &params, &param_count);
+        }
+
+        /* Body: "that returns EXPR" (single expression form) */
+        if (check_word(p, "that")) {
+            advance_parser(p);
+            if (check_word(p, "returns") || check_word(p, "return")) {
+                advance_parser(p);
+                ASTNode *body = parse_expression(p);
+                return ast_lambda(params, param_count, body, a_tok->line, a_tok->col);
+            }
+        }
+        /* Simpler "returning EXPR" / "returns EXPR" */
+        if (check_word(p, "returning") || check_word(p, "returns")) {
+            advance_parser(p);
+            ASTNode *body = parse_expression(p);
+            return ast_lambda(params, param_count, body, a_tok->line, a_tok->col);
+        }
+
+        /* Not a recognized lambda form — restore */
+        for (int i = 0; i < param_count; i++) free(params[i]);
+        free(params);
+        p->pos = saved;
     }
 
     /* Constructor: "a [new] TYPE with FIELD X, FIELD Y, ..."
@@ -1840,6 +2035,7 @@ static int next_looks_like_param(Parser *p) {
         "display", "print", "show", "say", "if", "when", "whenever",
         "suppose", "assuming", "given", "while", "for", "loop", "return",
         "break", "continue", "skip", "call", "end", "else", "otherwise",
+        "that", "returning", "returns",
         NULL
     };
     for (int i = 0; stmt_kw[i]; i++) {

@@ -57,6 +57,23 @@ BabelValue *babel_struct_new(const char *type_name) {
     return val;
 }
 
+BabelValue *babel_closure_new(BabelFnPtr fn, BabelValue *env, int arity) {
+    BabelValue *val = babel_value_new(VAL_FUNCTION);
+    val->as.closure = babel_alloc(sizeof(BabelClosure));
+    val->as.closure->fn = fn;
+    val->as.closure->env = env ? babel_retain(env) : NULL;
+    val->as.closure->arity = arity;
+    return val;
+}
+
+BabelValue *babel_call(BabelValue *fn_val, BabelValue **args, int argc) {
+    if (fn_val->type != VAL_FUNCTION) {
+        return babel_nothing();
+    }
+    BabelClosure *c = fn_val->as.closure;
+    return c->fn(args, argc, c->env);
+}
+
 BabelValue *babel_retain(BabelValue *val) {
     if (val) val->refcount++;
     return val;
@@ -84,6 +101,9 @@ void babel_release(BabelValue *val) {
             babel_free(map->entries);
             if (map->type_name) babel_free(map->type_name);
             babel_free(map);
+        } else if (val->type == VAL_FUNCTION) {
+            if (val->as.closure->env) babel_release(val->as.closure->env);
+            babel_free(val->as.closure);
         }
         babel_free(val);
     }
@@ -100,6 +120,7 @@ const char *babel_type_name(BabelValue *val) {
             /* Typed struct? Return the struct's type name */
             if (val->as.map->type_name) return val->as.map->type_name;
             return "map";
+        case VAL_FUNCTION: return "function";
     }
     return "unknown";
 }
@@ -178,6 +199,8 @@ char *babel_to_cstring(BabelValue *val) {
             out[len] = '\0';
             return out;
         }
+        case VAL_FUNCTION:
+            return babel_strdup("<function>");
     }
     return babel_strdup("unknown");
 }

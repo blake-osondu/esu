@@ -3,6 +3,7 @@
 
 typedef struct BabelList BabelList;
 typedef struct BabelMap BabelMap;
+typedef struct BabelClosure BabelClosure;
 
 typedef enum {
     VAL_NOTHING,
@@ -11,7 +12,18 @@ typedef enum {
     VAL_BOOL,
     VAL_LIST,
     VAL_MAP,
+    VAL_FUNCTION,
 } ValueType;
+
+/* Function value: a C function pointer plus an optional captured environment */
+typedef struct BabelValue *(*BabelFnPtr)(struct BabelValue **args, int argc,
+                                         struct BabelValue *env);
+
+struct BabelClosure {
+    BabelFnPtr fn;          /* C function implementing the body */
+    struct BabelValue *env; /* Captured environment (a map of var->value) or NULL */
+    int arity;              /* number of declared params (for error messages) */
+};
 
 typedef struct BabelValue {
     ValueType type;
@@ -21,6 +33,7 @@ typedef struct BabelValue {
         int boolean;
         BabelList *list;
         BabelMap *map;
+        BabelClosure *closure;
     } as;
     int refcount;
 } BabelValue;
@@ -52,6 +65,10 @@ BabelValue *babel_bool(int b);
 BabelValue *babel_list_new(void);
 BabelValue *babel_map_new(void);
 BabelValue *babel_struct_new(const char *type_name);
+BabelValue *babel_closure_new(BabelFnPtr fn, BabelValue *env, int arity);
+
+/* Call a function value with args */
+BabelValue *babel_call(BabelValue *fn_val, BabelValue **args, int argc);
 
 BabelValue *babel_retain(BabelValue *val);
 void babel_release(BabelValue *val);

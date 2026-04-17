@@ -17,6 +17,11 @@ BabelValue *babel_list_is_empty(BabelValue *list);
 BabelValue *babel_list_joined(BabelValue *list, BabelValue *separator);
 BabelValue *babel_list_slice(BabelValue *list, BabelValue *start, BabelValue *end);
 
+/* Higher-order: map, filter, reduce */
+BabelValue *babel_map_list(BabelValue *list, BabelValue *fn);
+BabelValue *babel_filter_list(BabelValue *list, BabelValue *fn);
+BabelValue *babel_reduce_list(BabelValue *list, BabelValue *fn, BabelValue *init);
+
 /* Index expression: works for both lists and strings */
 BabelValue *babel_index(BabelValue *collection, BabelValue *index);
 void babel_index_set(BabelValue *collection, BabelValue *index, BabelValue *value);

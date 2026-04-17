@@ -1,0 +1,40 @@
+-- Lambda: anonymous function assigned to variable
+double is a function of x that returns x * 2
+display double(5)
+
+-- Lambda called directly (indirect call)
+square is a function of x that returns x * x
+display square(4)
+
+-- Pass named function to map
+numbers is [1, 2, 3, 4, 5]
+display map double over numbers
+
+-- Inline lambda with map
+display map (a function of x that returns x * 10) over numbers
+
+-- Filter with named predicate
+is-even is a function of x that returns x % 2 == 0
+display filter numbers where is-even
+
+-- Keep items (natural phrasing)
+display keep items from numbers where is-even
+
+-- Reduce (fold)
+adder is a function of x and y that returns x + y
+total is reduce numbers using adder starting at 0
+display total
+
+-- Map chained with filter
+large is a function of x that returns x > 10
+big-doubled is filter (map double over numbers) where large
+display big-doubled
+
+-- Named function also works as map target
+function triple taking x, return x * 3.
+display map triple over numbers
+
+-- Transform natural phrasing
+display transform every item in numbers using double
+
+display "All functional tests passed"

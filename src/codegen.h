@@ -12,6 +12,16 @@ typedef struct {
     char **declared_vars;
     int declared_count;
     int declared_cap;
+    /* Track declared function names for direct-call vs indirect-call */
+    char **function_names;
+    int function_names_count;
+    int function_names_cap;
+    /* Counter for anonymous lambda functions */
+    int lambda_counter;
+    /* Hoisted lambda definitions (emitted before main) */
+    char *hoisted;
+    int hoisted_len;
+    int hoisted_cap;
 } CodeGen;
 
 void codegen_init(CodeGen *cg);
