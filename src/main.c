@@ -8,6 +8,7 @@
 #include "parser.h"
 #include "resolver.h"
 #include "codegen.h"
+#include "module.h"
 #include "util.h"
 #include "error.h"
 #include "linenoise.h"
@@ -71,6 +72,10 @@ static int compile_esu_src(const char *source, const char *output_path,
     parser_init(&parser, tokens, token_count);
     ASTNode *program = parser_parse(&parser);
 
+    /* Expand imports (must happen before resolver so imported function
+     * names are available for verb conjugation resolution) */
+    codegen_expand_imports(program);
+
     /* Resolve */
     resolver_run(program);
 
@@ -125,6 +130,14 @@ static int compile_esu_src(const char *source, const char *output_path,
 }
 
 static int compile_esu(const char *source_path, const char *output_path, int emit_only) {
+    /* Set module base dir to the source file's directory for relative imports */
+    char dir_buf[4096];
+    strncpy(dir_buf, source_path, sizeof(dir_buf) - 1);
+    dir_buf[sizeof(dir_buf) - 1] = '\0';
+    char *last_slash = strrchr(dir_buf, '/');
+    if (last_slash) { *last_slash = '\0'; module_set_base_dir(dir_buf); }
+    else { module_set_base_dir("."); }
+
     char *source = read_file(source_path);
     /* Use source_path as base name for intermediate C file */
     const char *out = emit_only ? "" : (output_path ? output_path : source_path);
@@ -681,6 +694,8 @@ static int run_repl(void) {
 }
 
 int main(int argc, char **argv) {
+    module_init();
+
     if (argc < 2) {
         usage(argv[0]);
         return 1;

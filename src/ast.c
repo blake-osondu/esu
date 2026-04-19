@@ -207,6 +207,12 @@ ASTNode *ast_call_value(ASTNode *callee, ASTNode **args, int arg_count, int line
     return node;
 }
 
+ASTNode *ast_import(const char *module_path, int line, int col) {
+    ASTNode *node = ast_new(NODE_IMPORT, line, col);
+    node->as.import_stmt.module_path = str_dup(module_path);
+    return node;
+}
+
 void ast_free(ASTNode *node) {
     if (!node) return;
 
@@ -385,6 +391,9 @@ void ast_free(ASTNode *node) {
             for (int i = 0; i < node->as.call_value.arg_count; i++)
                 ast_free(node->as.call_value.args[i]);
             free(node->as.call_value.args);
+            break;
+        case NODE_IMPORT:
+            free(node->as.import_stmt.module_path);
             break;
     }
 

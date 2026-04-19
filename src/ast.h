@@ -35,6 +35,7 @@ typedef enum {
     NODE_FIELD_ASSIGN,      /* x.field is V  or  x[k] is V */
     NODE_LAMBDA,            /* anonymous function */
     NODE_CALL_VALUE,        /* call a function value (not by name) */
+    NODE_IMPORT,            /* use "file" / import X from "file" */
 } NodeType;
 
 typedef struct ASTNode ASTNode;
@@ -208,6 +209,11 @@ struct ASTNode {
             ASTNode **args;
             int arg_count;
         } call_value;
+
+        /* NODE_IMPORT: use "file" / use X from "file" */
+        struct {
+            char *module_path;      /* the file path string */
+        } import_stmt;
     } as;
 };
 
@@ -236,6 +242,7 @@ ASTNode *ast_method_call(ASTNode *object, const char *method_name, ASTNode **arg
 ASTNode *ast_field_assign(ASTNode *object, ASTNode *key, ASTNode *value, int line, int col);
 ASTNode *ast_lambda(char **params, int param_count, ASTNode *body_expr, int line, int col);
 ASTNode *ast_call_value(ASTNode *callee, ASTNode **args, int arg_count, int line, int col);
+ASTNode *ast_import(const char *module_path, int line, int col);
 
 /* NodeList helpers */
 void node_list_init(NodeList *list);

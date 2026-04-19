@@ -33,6 +33,7 @@ add_executable(esu
     src/ast.c
     src/parser.c
     src/resolver.c
+    src/module.c
     src/codegen.c
     src/error.c
     src/util.c

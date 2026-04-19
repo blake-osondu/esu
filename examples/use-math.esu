@@ -1,0 +1,13 @@
+-- Import from a local file
+use "math-lib"
+
+display double(5)
+display triple(4)
+display square(6)
+display add(10, 20)
+
+-- Can also use verb conjugation on imported functions
+display 7 doubled
+display 3 tripled
+
+display "Imports work!"

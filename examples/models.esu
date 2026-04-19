@@ -1,0 +1,9 @@
+-- Shared data models
+a person has a name and an age.
+a student is a kind of person and has a school.
+
+to greet a person
+    display "Hello, I'm " + self.name.
+
+to describe a student
+    display self.name + " studies at " + self.school.

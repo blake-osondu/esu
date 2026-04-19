@@ -217,6 +217,15 @@ static void collect_functions(ASTNode *program, NameTable *t) {
     }
 }
 
+static void collect_methods(ASTNode *program, NameTable *t) {
+    NodeList *stmts = &program->as.program.stmts;
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type == NODE_METHOD_DEF) {
+            nametable_add(t, stmts->items[i]->as.method_def.name);
+        }
+    }
+}
+
 static void resolve_node(ASTNode *node, NameTable *funcs);
 
 /*
@@ -438,6 +447,97 @@ static void resolve_node(ASTNode *node, NameTable *funcs) {
     }
 }
 
+/* Recursively rewrite bare method calls: IDENT METHOD_NAME [args] → method_call
+ * at the statement level. Detects patterns where an identifier is followed
+ * by a known method name as the next statement. */
+static void resolve_bare_methods(NodeList *list, NameTable *methods) {
+    for (int i = 0; i + 1 < list->count; i++) {
+        ASTNode *curr = list->items[i];
+        ASTNode *next = list->items[i + 1];
+
+        /* Pattern: identifier followed by known method name (as expression stmt) */
+        if (curr->type == NODE_IDENTIFIER && next->type == NODE_IDENTIFIER &&
+            nametable_has(methods, next->as.identifier.name)) {
+            /* Merge: curr.method_name([args that follow]) */
+            const char *method = next->as.identifier.name;
+
+            /* Collect any additional expression statements as args */
+            ASTNode **args = NULL;
+            int arg_count = 0;
+            int consumed = 1; /* will consume 'next' */
+
+            /* Check if there are more expression stmts on the SAME LINE
+             * after method name (args to the method call) */
+            int method_line = next->line;
+            int j = i + 2;
+            int arg_cap = 4;
+            args = malloc(sizeof(ASTNode *) * arg_cap);
+            while (j < list->count) {
+                ASTNode *arg = list->items[j];
+                /* Only consume args on the same line */
+                if (arg->line != method_line) break;
+                if (arg->type == NODE_IDENTIFIER || arg->type == NODE_NUMBER_LIT ||
+                    arg->type == NODE_STRING_LIT) {
+                    if (arg_count >= arg_cap) {
+                        arg_cap *= 2;
+                        args = realloc(args, sizeof(ASTNode *) * arg_cap);
+                    }
+                    args[arg_count++] = arg;
+                    consumed++;
+                    j++;
+                } else {
+                    break;
+                }
+            }
+
+            /* Rewrite curr to method call */
+            ASTNode *obj = ast_identifier(curr->as.identifier.name,
+                                          curr->line, curr->col);
+            free(curr->as.identifier.name);
+            curr->type = NODE_METHOD_CALL;
+            curr->as.method_call.object = obj;
+            curr->as.method_call.method_name = str_dup_r(method);
+            curr->as.method_call.args = args;
+            curr->as.method_call.arg_count = arg_count;
+
+            /* Remove consumed stmts (the method name + args) */
+            /* Free the method name node (not the args — they're reused) */
+            free(next->as.identifier.name);
+            free(next);
+            int remove_count = consumed;
+            for (int k = i + 1; k + remove_count < list->count; k++) {
+                list->items[k] = list->items[k + remove_count];
+            }
+            list->count -= remove_count;
+            continue;
+        }
+    }
+
+    /* Recurse into blocks */
+    for (int i = 0; i < list->count; i++) {
+        ASTNode *n = list->items[i];
+        if (n->type == NODE_IF_STMT) {
+            resolve_bare_methods(&n->as.if_stmt.body, methods);
+            resolve_bare_methods(&n->as.if_stmt.else_body, methods);
+        } else if (n->type == NODE_WHILE_STMT) {
+            resolve_bare_methods(&n->as.while_stmt.body, methods);
+        } else if (n->type == NODE_FOR_RANGE_STMT) {
+            resolve_bare_methods(&n->as.for_range.body, methods);
+        } else if (n->type == NODE_FOR_IN_STMT) {
+            resolve_bare_methods(&n->as.for_in.body, methods);
+        } else if (n->type == NODE_LOOP_STMT) {
+            resolve_bare_methods(&n->as.loop_stmt.body, methods);
+        } else if (n->type == NODE_FUNCTION_DEF) {
+            resolve_bare_methods(&n->as.func_def.body, methods);
+        } else if (n->type == NODE_METHOD_DEF) {
+            resolve_bare_methods(&n->as.method_def.body, methods);
+        } else if (n->type == NODE_TRY_STMT) {
+            resolve_bare_methods(&n->as.try_stmt.body, methods);
+            resolve_bare_methods(&n->as.try_stmt.catch_body, methods);
+        }
+    }
+}
+
 void resolver_run(ASTNode *program) {
     NameTable funcs;
     nametable_init(&funcs);
@@ -448,4 +548,13 @@ void resolver_run(ASTNode *program) {
     }
 
     nametable_free(&funcs);
+
+    /* Resolve bare method calls: "alice greet" → alice.greet() */
+    NameTable methods;
+    nametable_init(&methods);
+    collect_methods(program, &methods);
+    if (methods.count > 0) {
+        resolve_bare_methods(&program->as.program.stmts, &methods);
+    }
+    nametable_free(&methods);
 }

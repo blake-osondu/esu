@@ -25,6 +25,7 @@ typedef struct {
 } CodeGen;
 
 void codegen_init(CodeGen *cg);
+void codegen_expand_imports(ASTNode *program);
 void codegen_generate(CodeGen *cg, ASTNode *program);
 char *codegen_get_output(CodeGen *cg);
 void codegen_free(CodeGen *cg);

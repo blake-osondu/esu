@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "module.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -621,6 +622,9 @@ static void gen_statement(CodeGen *cg, ASTNode *node) {
         case NODE_METHOD_DEF:
             /* Handled at top level — no output here */
             break;
+        case NODE_IMPORT:
+            /* Handled at top level — no output here */
+            break;
         case NODE_METHOD_CALL:
             /* Method call as statement: discard return */
             emit_indent(cg);
@@ -758,7 +762,50 @@ static void gen_method_def(CodeGen *cg, ASTNode *node) {
     cg->declared_cap = saved_cap;
 }
 
+/* Expand imports: load each imported module's AST and merge its
+ * function defs, method defs, and struct decls into the program's
+ * statement list (prepended so they're available to later code). */
+void codegen_expand_imports(ASTNode *program) {
+    NodeList *stmts = &program->as.program.stmts;
+    /* Collect imported AST nodes to prepend */
+    NodeList imported;
+    node_list_init(&imported);
+
+    for (int i = 0; i < stmts->count; i++) {
+        if (stmts->items[i]->type != NODE_IMPORT) continue;
+        const char *path = stmts->items[i]->as.import_stmt.module_path;
+        ASTNode *mod = module_load(path);
+        if (!mod) continue;
+        /* Merge the module's definitions (not its executable statements) */
+        NodeList *mod_stmts = &mod->as.program.stmts;
+        for (int j = 0; j < mod_stmts->count; j++) {
+            NodeType t = mod_stmts->items[j]->type;
+            if (t == NODE_FUNCTION_DEF || t == NODE_METHOD_DEF ||
+                t == NODE_STRUCT_DECL || t == NODE_IMPORT) {
+                node_list_push(&imported, mod_stmts->items[j]);
+            }
+        }
+    }
+
+    if (imported.count > 0) {
+        /* Prepend imported definitions before existing statements */
+        int new_count = imported.count + stmts->count;
+        ASTNode **new_items = malloc(sizeof(ASTNode *) * new_count);
+        memcpy(new_items, imported.items, sizeof(ASTNode *) * imported.count);
+        memcpy(new_items + imported.count, stmts->items,
+               sizeof(ASTNode *) * stmts->count);
+        free(stmts->items);
+        stmts->items = new_items;
+        stmts->count = new_count;
+        stmts->capacity = new_count;
+    }
+    free(imported.items);
+}
+
 void codegen_generate(CodeGen *cg, ASTNode *program) {
+    /* Imports should already be expanded by compile_esu_src before
+     * the resolver runs. Don't re-expand here. */
+
     NodeList *stmts = &program->as.program.stmts;
 
     /* Preamble */

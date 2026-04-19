@@ -1,0 +1,13 @@
+-- A reusable math library
+
+function double taking x
+    return x * 2.
+
+function triple taking x
+    return x * 3.
+
+function square taking x
+    return x * x.
+
+function add taking a and b
+    return a + b.

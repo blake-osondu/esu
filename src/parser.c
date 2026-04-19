@@ -1760,7 +1760,7 @@ static void parse_block(Parser *p, NodeList *list) {
         ASTNode *stmt = parse_statement(p);
         node_list_push(list, stmt);
         if (!check_type(p, TOK_EOF) && !is_block_end(p)) {
-            if (!is_separator(p)) {
+            if (!is_separator(p) && !check_type(p, TOK_WORD)) {
                 esu_error_at_token(current(p), "expected end of line or ',' after statement");
             }
             skip_separators(p);
@@ -2153,6 +2153,51 @@ static ASTNode *parse_statement(Parser *p) {
         node_list_init(&node->as.for_in.body);
         node_list_push(&node->as.for_in.body, print_node);
         return node;
+    }
+
+    /* Import: "use STRING" / "import STRING" / "load STRING"
+     * Also: "use X from STRING" — for now, just imports the whole file */
+    if (check_word(p, "use") || check_word(p, "import") || check_word(p, "load")) {
+        Token *t = advance_parser(p); /* consume use/import/load */
+        /* Check for "X [and Y] from STRING" — skip the names, import whole file */
+        if (check_type(p, TOK_WORD) && !check_type(p, TOK_STRING)) {
+            /* Could be "use X and Y from FILE" or just "use identifier" */
+            /* Scan forward to see if there's a "from" */
+            int saved = p->pos;
+            while (check_type(p, TOK_WORD) || check_type(p, TOK_COMMA)) {
+                advance_parser(p);
+                if (check_word(p, "and")) advance_parser(p);
+            }
+            if (check_word(p, "from")) {
+                advance_parser(p); /* consume "from" */
+            } else {
+                p->pos = saved;
+            }
+        }
+        /* Now expect a string path */
+        Token *path = expect_type(p, TOK_STRING, "expected module path string after use/import");
+        return ast_import(path->value, t->line, t->col);
+    }
+    /* "bring in [X from] STRING" */
+    if (check_word(p, "bring") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        strcmp(p->tokens[p->pos + 1].value, "in") == 0) {
+        Token *t = advance_parser(p); advance_parser(p); /* consume "bring in" */
+        /* Skip optional "X [and Y] from" */
+        if (check_type(p, TOK_WORD) && !check_type(p, TOK_STRING)) {
+            int saved = p->pos;
+            while (check_type(p, TOK_WORD) || check_type(p, TOK_COMMA)) {
+                advance_parser(p);
+                if (check_word(p, "and")) advance_parser(p);
+            }
+            if (check_word(p, "from")) {
+                advance_parser(p);
+            } else {
+                p->pos = saved;
+            }
+        }
+        Token *path = expect_type(p, TOK_STRING, "expected module path after 'bring in'");
+        return ast_import(path->value, t->line, t->col);
     }
 
     /* Struct declarations and extensions:
@@ -2632,8 +2677,11 @@ ASTNode *parser_parse(Parser *p) {
         ASTNode *stmt = parse_statement(p);
         node_list_push(&program->as.program.stmts, stmt);
 
-        /* After a statement, expect separator, period (top-level), or EOF */
-        if (!check_type(p, TOK_EOF) && !is_separator(p) && !check_type(p, TOK_DOT)) {
+        /* After a statement, expect separator, period, EOF, or another word
+         * (lenient: allows "alice greet" on one line — the resolver
+         * can merge adjacent identifiers into method calls later) */
+        if (!check_type(p, TOK_EOF) && !is_separator(p) &&
+            !check_type(p, TOK_DOT) && !check_type(p, TOK_WORD)) {
             esu_error_at_token(current(p), "expected end of line or ',' after statement");
         }
         /* Consume period at top level (not inside a block) */
