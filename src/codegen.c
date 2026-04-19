@@ -771,9 +771,26 @@ void codegen_expand_imports(ASTNode *program) {
     NodeList imported;
     node_list_init(&imported);
 
+    /* Track which modules we've already imported to avoid duplicates */
+    char *loaded_modules[128];
+    int loaded_count = 0;
+
     for (int i = 0; i < stmts->count; i++) {
         if (stmts->items[i]->type != NODE_IMPORT) continue;
         const char *path = stmts->items[i]->as.import_stmt.module_path;
+
+        /* Skip if already imported */
+        int already = 0;
+        for (int k = 0; k < loaded_count; k++) {
+            if (strcmp(loaded_modules[k], path) == 0) { already = 1; break; }
+        }
+        if (already) continue;
+        if (loaded_count < 128) {
+            loaded_modules[loaded_count] = malloc(strlen(path) + 1);
+            strcpy(loaded_modules[loaded_count], path);
+            loaded_count++;
+        }
+
         ASTNode *mod = module_load(path);
         if (!mod) continue;
         /* Merge the module's definitions (not its executable statements) */
@@ -786,6 +803,9 @@ void codegen_expand_imports(ASTNode *program) {
             }
         }
     }
+
+    /* Free tracking */
+    for (int k = 0; k < loaded_count; k++) free(loaded_modules[k]);
 
     if (imported.count > 0) {
         /* Prepend imported definitions before existing statements */

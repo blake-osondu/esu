@@ -485,6 +485,129 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
         }
 
         /*
+         * ===== NATURAL IMPORT SUGAR =====
+         * Triggers: bring in, include, using, with, I/we need, this needs
+         * Noise words stripped: the, a, an, library, module, helpers, helper,
+         *   file, package, from, code
+         * Remaining words joined with hyphens to form module name.
+         * If a quoted string is present, use that instead.
+         *
+         * "bring in the math helpers" → import "math-helpers"
+         * "using the user models"     → import "user-models"
+         * "I need math"               → import "math"
+         * "include models"            → import "models"
+         * "with the http library"     → import "http"
+         */
+        {
+            int is_import_trigger = 0;
+            int skip_count = 0;
+
+            /* "bring in" */
+            if (is_word(tokens, i, count, "bring") &&
+                is_word(tokens, i+1, count, "in") &&
+                (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+                is_import_trigger = 1; skip_count = 2;
+            }
+            /* "include" */
+            else if (is_word(tokens, i, count, "include") &&
+                     (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+                is_import_trigger = 1; skip_count = 1;
+            }
+            /* "using" at line start */
+            else if (is_word(tokens, i, count, "using") &&
+                     (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+                is_import_trigger = 1; skip_count = 1;
+            }
+            /* "with" at line start — only when followed by "the" to
+             * disambiguate from other uses of "with" */
+            else if (is_word(tokens, i, count, "with") &&
+                     is_word(tokens, i+1, count, "the") &&
+                     (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+                is_import_trigger = 1; skip_count = 1;
+            }
+            /* "I need" / "we need" / "this needs" / "this file needs" */
+            else if ((is_word(tokens, i, count, "I") ||
+                      is_word(tokens, i, count, "we")) &&
+                     (is_word(tokens, i+1, count, "need") ||
+                      is_word(tokens, i+1, count, "needs")) &&
+                     (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+                is_import_trigger = 1; skip_count = 2;
+            }
+            else if (is_word(tokens, i, count, "this") &&
+                     (is_word(tokens, i+1, count, "needs") ||
+                      (is_word(tokens, i+1, count, "file") &&
+                       is_word(tokens, i+2, count, "needs"))) &&
+                     (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+                is_import_trigger = 1;
+                skip_count = is_word(tokens, i+1, count, "file") ? 3 : 2;
+            }
+
+            if (is_import_trigger) {
+                i += skip_count;
+
+                /* Check if the next token is a quoted string — use it directly */
+                if (i < count && is_type(tokens, i, count, TOK_STRING)) {
+                    tlist_push(&out, syn_word("import", line, col));
+                    tlist_push(&out, clone_token(&tokens[i]));
+                    i++;
+                    continue;
+                }
+
+                /* Collect bare words, skip noise, join with hyphens */
+                static const char *noise[] = {
+                    "the", "a", "an", "library", "module", "helpers",
+                    "helper", "file", "package", "code", "from",
+                    NULL
+                };
+
+                char name_buf[256];
+                int name_len = 0;
+                int word_count = 0;
+
+                while (i < count &&
+                       !is_type(tokens, i, count, TOK_NEWLINE) &&
+                       !is_type(tokens, i, count, TOK_EOF) &&
+                       !(tokens[i].type == TOK_DOT) &&
+                       !(tokens[i].type == TOK_COMMA)) {
+                    if (tokens[i].type != TOK_WORD) { i++; continue; }
+
+                    /* Check if noise word */
+                    const char *w = tokens[i].value;
+                    int is_noise = 0;
+                    for (int n = 0; noise[n]; n++) {
+                        if (strcmp(w, noise[n]) == 0) { is_noise = 1; break; }
+                    }
+                    if (is_noise) { i++; continue; }
+
+                    /* Append word to name_buf with hyphen separator */
+                    int wlen = strlen(w);
+                    if (word_count > 0 && name_len + 1 < (int)sizeof(name_buf)) {
+                        name_buf[name_len++] = '-';
+                    }
+                    if (name_len + wlen < (int)sizeof(name_buf)) {
+                        memcpy(name_buf + name_len, w, wlen);
+                        name_len += wlen;
+                    }
+                    word_count++;
+                    i++;
+                }
+                name_buf[name_len] = '\0';
+
+                if (word_count > 0) {
+                    tlist_push(&out, syn_word("import", line, col));
+                    Token str_tok;
+                    str_tok.type = TOK_STRING;
+                    str_tok.value = malloc(name_len + 1);
+                    strcpy(str_tok.value, name_buf);
+                    str_tok.line = line;
+                    str_tok.col = col;
+                    tlist_push(&out, str_tok);
+                }
+                continue;
+            }
+        }
+
+        /*
          * ===== ERROR HANDLING SUGAR =====
          */
 

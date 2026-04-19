@@ -1,0 +1,33 @@
+-- Testing all natural import phrasings
+-- Each line imports math-lib.esu using different wording
+
+bring in the math lib
+display "1: bring in — " + double(5)
+
+-- Now test with models.esu
+include the models
+alice is a new person with name "Alice" and age 30
+display "2: include — " + alice.name
+
+-- Test other forms by re-importing (already cached, no error)
+using the math lib
+display "3: using — " + triple(3)
+
+I need the math lib
+display "4: I need — " + square(4)
+
+we need the math lib
+display "5: we need — " + add(10, 20)
+
+this needs the math lib
+display "6: this needs — " + double(100)
+
+-- Quoted path still works
+use "math-lib"
+display "7: quoted — " + triple(7)
+
+-- Bare name without noise words
+include models
+display "8: bare include — " + alice's name
+
+display "All import styles work!"
