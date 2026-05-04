@@ -868,13 +868,30 @@ Token *normalizer_run(Token *tokens, int count, int *out_count) {
             continue;
         }
 
-        /* "suppose" / "assuming" / "when" / "whenever" / "given" → "if" */
+        /* "suppose" / "assuming" / "when" / "whenever" / "given" → "if"
+         * EXCEPT when "when" is followed by route-handler patterns
+         * (when someone, when anyone, when a user, etc.) — pass those through
+         * for the parser's HTTP route handler. */
         if ((is_word(tokens, i, count, "suppose") ||
              is_word(tokens, i, count, "assuming") ||
              is_word(tokens, i, count, "when") ||
              is_word(tokens, i, count, "whenever") ||
              is_word(tokens, i, count, "given")) &&
             (i == 0 || is_type(tokens, i-1, count, TOK_NEWLINE))) {
+            /* Check for route patterns: when followed by someone/anyone/a/the */
+            int is_route = 0;
+            if (is_word(tokens, i, count, "when") || is_word(tokens, i, count, "whenever")) {
+                if (is_word(tokens, i+1, count, "someone") ||
+                    is_word(tokens, i+1, count, "anyone")) {
+                    is_route = 1;
+                }
+            }
+            if (is_route) {
+                /* Pass "when" through to the parser */
+                tlist_push(&out, clone_token(&tokens[i]));
+                i++;
+                continue;
+            }
             tlist_push(&out, syn_word("if", line, col));
             i++;
             continue;

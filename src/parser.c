@@ -577,6 +577,92 @@ static ASTNode *parse_primary(Parser *p) {
         return make_builtin_call("__input", args, 1, t->line, t->col);
     }
 
+    /* --- JSON builtins --- */
+    /* "parse EXPR as json" / "EXPR parsed as json" handled in postfix */
+    /* "EXPR as json" / "EXPR to json" handled in postfix */
+
+    /* "parse json EXPR" / "parse EXPR as json" */
+    if (check_word(p, "parse") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        /* "parse json STRING" */
+        if (check_word(p, "json")) {
+            advance_parser(p);
+            ASTNode *arg = parse_postfix(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = arg;
+            return make_builtin_call("__json_parse", args, 1, t->line, t->col);
+        }
+        /* "parse EXPR as json" */
+        ASTNode *arg = parse_comparison(p);
+        if (check_word(p, "as") && p->pos + 1 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD &&
+            strcmp(p->tokens[p->pos + 1].value, "json") == 0) {
+            advance_parser(p); advance_parser(p); /* as json */
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = arg;
+            return make_builtin_call("__json_parse", args, 1, t->line, t->col);
+        }
+        ast_free(arg);
+        p->pos = saved;
+    }
+
+    /* --- Request accessors (in route handlers) ---
+     * "the request body" / "request body" → request["body"]
+     * "the request path" / "request path" → request["path"]
+     * "the request method" / "request method" → request["method"]
+     * Note: "the" is already stripped by the normalizer mid-expression. */
+    if (check_word(p, "request") && p->pos + 1 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD) {
+        const char *next_w = p->tokens[p->pos + 1].value;
+        if (strcmp(next_w, "body") == 0 || strcmp(next_w, "path") == 0 ||
+            strcmp(next_w, "method") == 0) {
+            Token *t = advance_parser(p); /* consume "request" */
+            Token *field = advance_parser(p); /* the field name */
+            return ast_index_expr(
+                ast_identifier("request", t->line, t->col),
+                ast_string_lit(field->value, field->line, field->col),
+                t->line, t->col);
+        }
+    }
+
+    /* --- HTTP client builtins (prefix) --- */
+    /* "fetch URL" / "fetch the contents of URL" */
+    if (check_word(p, "fetch") && p->pos + 1 < p->count) {
+        Token *t = advance_parser(p);
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "contents")) advance_parser(p);
+        if (check_word(p, "of")) advance_parser(p);
+        ASTNode *url = parse_postfix(p);
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = url;
+        return make_builtin_call("__http_get", args, 1, t->line, t->col);
+    }
+
+    /* "a new http server on port N" */
+    if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 3 < p->count) {
+        int saved = p->pos;
+        advance_parser(p); /* a/an */
+        int had_new = 0;
+        if (check_word(p, "new")) { advance_parser(p); had_new = 1; }
+        if (check_word(p, "http") || check_word(p, "web")) {
+            advance_parser(p);
+            if (check_word(p, "server")) {
+                advance_parser(p);
+                /* "on port N" */
+                if (check_word(p, "on")) advance_parser(p);
+                if (check_word(p, "port")) advance_parser(p);
+                ASTNode *port = parse_postfix(p);
+                ASTNode **args = malloc(sizeof(ASTNode *));
+                args[0] = port;
+                return make_builtin_call("__http_create_server", args, 1,
+                                         p->tokens[saved].line, p->tokens[saved].col);
+            }
+        }
+        p->pos = saved;
+        /* Fall through to constructor handler below */
+    }
+
     /* --- Directory builtins (no args) --- */
     /* "home directory" / "home folder" → __home_dir() */
     if (check_word(p, "home") && p->pos + 1 < p->count &&
@@ -1210,12 +1296,14 @@ static int looks_like_past_tense(Parser *p) {
     const char *w = current(p)->value;
     int len = strlen(w);
     if (len < 4) return 0;
+    /* Hyphenated identifiers are not verbs */
+    if (strchr(w, '-')) return 0;
     /* Don't match keywords */
     if (strcmp(w, "continued") == 0 || strcmp(w, "returned") == 0 ||
         strcmp(w, "called") == 0 || strcmp(w, "displayed") == 0 ||
         strcmp(w, "replaced") == 0 || strcmp(w, "uppercased") == 0 ||
         strcmp(w, "lowercased") == 0 || strcmp(w, "trimmed") == 0 ||
-        strcmp(w, "rounded") == 0) return 0;
+        strcmp(w, "rounded") == 0 || strcmp(w, "parsed") == 0) return 0;
     if (len > 3 && strcmp(w + len - 3, "ied") == 0) return 1;
     if (len > 2 && strcmp(w + len - 2, "ed") == 0) return 1;
     return 0;
@@ -1228,6 +1316,9 @@ static int looks_like_prefix_verb(Parser *p) {
     const char *w = current(p)->value;
     int len = strlen(w);
     if (len < 4) return 0;
+    /* Hyphenated identifiers (my-string, json-string) are not verbs even if
+     * they happen to end in -ing/-ed. They're compound names. */
+    if (strchr(w, '-')) return 0;
     /* Don't match keywords */
     if (strcmp(w, "taking") == 0 || strcmp(w, "calling") == 0 ||
         strcmp(w, "equals") == 0 || strcmp(w, "exceeds") == 0 ||
@@ -1578,6 +1669,26 @@ static ASTNode *parse_postfix(Parser *p) {
             ASTNode **args = malloc(sizeof(ASTNode *));
             args[0] = expr;
             expr = make_builtin_call("__trim", args, 1, t->line, t->col);
+            continue;
+        }
+        /* "x as json" / "x to json" → __to_json(x) */
+        if (check_two_words(p, "as", "json") || check_two_words(p, "to", "json")) {
+            Token *t = advance_parser(p); advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = make_builtin_call("__to_json", args, 1, t->line, t->col);
+            continue;
+        }
+        /* "x parsed as json" → __json_parse(x) */
+        if (check_word(p, "parsed") && p->pos + 2 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD &&
+            strcmp(p->tokens[p->pos + 1].value, "as") == 0 &&
+            p->tokens[p->pos + 2].type == TOK_WORD &&
+            strcmp(p->tokens[p->pos + 2].value, "json") == 0) {
+            Token *t = advance_parser(p); advance_parser(p); advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = expr;
+            expr = make_builtin_call("__json_parse", args, 1, t->line, t->col);
             continue;
         }
         /* "x rounded" / "x rounded down" / "x rounded up" */
@@ -2199,6 +2310,162 @@ static ASTNode *parse_statement(Parser *p) {
         Token *path = expect_type(p, TOK_STRING, "expected module path after 'bring in'");
         return ast_import(path->value, t->line, t->col);
     }
+
+    /* --- HTTP server statements --- */
+    /* "start the server" / "start server" → __http_listen(server) */
+    if (check_word(p, "start") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "server")) {
+            advance_parser(p);
+            /* The server variable should be "server" by convention */
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = ast_identifier("server", t->line, t->col);
+            return make_builtin_call("__http_listen", args, 1, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+
+    /* "respond with EXPR [as json]" → return __http_respond(200, EXPR)
+     * "respond with STATUS and EXPR" → return __http_respond(STATUS, EXPR) */
+    if (check_word(p, "respond") && p->pos + 1 < p->count) {
+        Token *t = advance_parser(p);
+        if (check_word(p, "with")) advance_parser(p);
+        ASTNode *first = parse_comparison(p);
+        ASTNode *status_node;
+        ASTNode *body_node;
+        /* Check for "and BODY" pattern: "respond with 201 and EXPR" */
+        if (check_word(p, "and")) {
+            advance_parser(p);
+            status_node = first;
+            body_node = parse_comparison(p);
+        } else {
+            status_node = ast_number_lit(200, t->line, t->col);
+            body_node = first;
+        }
+        /* Check for "as json" postfix */
+        if (check_two_words(p, "as", "json")) {
+            advance_parser(p); advance_parser(p);
+            ASTNode **json_args = malloc(sizeof(ASTNode *));
+            json_args[0] = body_node;
+            body_node = make_builtin_call("__to_json", json_args, 1, t->line, t->col);
+        }
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = status_node; args[1] = body_node;
+        ASTNode *resp = make_builtin_call("__http_respond", args, 2, t->line, t->col);
+        return ast_return(resp, t->line, t->col);
+    }
+
+    /* "send EXPR to URL" → __http_post(URL, EXPR) */
+    if (check_word(p, "send") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p);
+        ASTNode *body = parse_comparison(p);
+        if (check_word(p, "to")) {
+            advance_parser(p);
+            ASTNode *url = parse_comparison(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = url; args[1] = body;
+            return make_builtin_call("__http_post", args, 2, t->line, t->col);
+        }
+        ast_free(body);
+        p->pos = saved;
+    }
+
+    /* "on GET/POST/... PATH [do] BLOCK end" — route definition
+     * Desugars to: __http_add_route(server, METHOD, PATH, lambda(request) BLOCK) */
+    if (check_word(p, "on") && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD &&
+        p->tokens[p->pos + 2].type == TOK_STRING) {
+        Token *t = advance_parser(p); /* on */
+        Token *method_tok = advance_parser(p); /* GET/POST/etc */
+        Token *path_tok = advance_parser(p); /* "/path" */
+
+        /* Optional "do" or comma */
+        if (check_word(p, "do")) advance_parser(p);
+        skip_separators(p);
+
+        /* Parse the handler body as a block */
+        NodeList body;
+        parse_block(p, &body);
+        expect_block_end(p, "route handler");
+
+        /* Create a lambda with param "request" and the body */
+        char **params = malloc(sizeof(char *));
+        params[0] = str_dup_parser("request");
+        ASTNode *lambda_node = ast_lambda(params, 1, NULL, t->line, t->col);
+        lambda_node->as.lambda.body = body;
+
+        /* Emit: __http_add_route(server, METHOD, PATH, lambda) */
+        ASTNode **args = malloc(sizeof(ASTNode *) * 4);
+        args[0] = ast_identifier("server", t->line, t->col);
+        args[1] = ast_string_lit(method_tok->value, t->line, t->col);
+        args[2] = ast_string_lit(path_tok->value, t->line, t->col);
+        args[3] = lambda_node;
+        return make_builtin_call("__http_add_route", args, 4, t->line, t->col);
+    }
+
+    /* "when someone visits PATH then BLOCK end" — GET route sugar */
+    if (check_word(p, "when") && p->pos + 2 < p->count) {
+        int saved = p->pos;
+        advance_parser(p); /* when */
+        if (check_word(p, "someone") || check_word(p, "anyone") ||
+            check_word(p, "a") || check_word(p, "the")) {
+            advance_parser(p);
+            if (check_word(p, "user") || check_word(p, "client") ||
+                check_word(p, "request")) advance_parser(p);
+
+            const char *method = "GET";
+            if (check_word(p, "visits") || check_word(p, "requests") ||
+                check_word(p, "opens")) {
+                advance_parser(p);
+            } else if (check_word(p, "sends")) {
+                advance_parser(p);
+                if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
+                /* "sends a POST to" */
+                if (check_type(p, TOK_WORD)) {
+                    Token *m = advance_parser(p);
+                    method = m->value;
+                }
+                if (check_word(p, "to")) advance_parser(p);
+            } else {
+                /* Not a route handler — restore and fall through to
+                 * regular 'when' (if/conditional) handling */
+                p->pos = saved;
+                goto not_route;
+            }
+
+            if (check_type(p, TOK_STRING)) {
+                Token *path_tok = advance_parser(p);
+                if (check_word(p, "then")) advance_parser(p);
+                skip_separators(p);
+
+                NodeList body;
+                parse_block(p, &body);
+                expect_block_end(p, "route handler");
+
+                char **params = malloc(sizeof(char *));
+                params[0] = str_dup_parser("request");
+                ASTNode *lambda_node = ast_lambda(params, 1, NULL,
+                    p->tokens[saved].line, p->tokens[saved].col);
+                lambda_node->as.lambda.body = body;
+
+                ASTNode **args = malloc(sizeof(ASTNode *) * 4);
+                args[0] = ast_identifier("server", p->tokens[saved].line,
+                                         p->tokens[saved].col);
+                args[1] = ast_string_lit(method, p->tokens[saved].line,
+                                         p->tokens[saved].col);
+                args[2] = ast_string_lit(path_tok->value, path_tok->line,
+                                         path_tok->col);
+                args[3] = lambda_node;
+                return make_builtin_call("__http_add_route", args, 4,
+                    p->tokens[saved].line, p->tokens[saved].col);
+            }
+        }
+        p->pos = saved;
+    }
+    not_route:
 
     /* Struct declarations and extensions:
      *   "a TYPE has FIELD, FIELD, and FIELD"           — basic declaration

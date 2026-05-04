@@ -12,6 +12,8 @@
 #include "esu_math.h"
 #include "esu_file.h"
 #include "esu_method.h"
+#include "esu_json.h"
+#include "esu_http.h"
 
 void esu_runtime_init(void);
 void esu_runtime_cleanup(void);

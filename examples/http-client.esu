@@ -1,0 +1,6 @@
+-- Fetch a URL
+response is fetch "http://example.com"
+display response["status"]
+display the length of response["body"]
+
+display "HTTP client works"

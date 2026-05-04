@@ -1,0 +1,14 @@
+-- Simple HTTP server with a few routes
+server is a new http server on port 3000
+
+when someone visits "/" then
+    respond with "Hello from Esu!".
+
+when someone visits "/api/health" then
+    respond with {"status": "ok"} as json.
+
+when someone sends a POST to "/api/echo" then
+    body is the request body
+    respond with body.
+
+start the server

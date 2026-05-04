@@ -7,6 +7,21 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # Compiler warnings
 add_compile_options(-Wall -Wextra -Wpedantic)
 
+# Third-party: mongoose (HTTP server/client)
+add_library(mongoose STATIC third_party/mongoose/mongoose.c)
+target_include_directories(mongoose PUBLIC ${CMAKE_SOURCE_DIR}/third_party/mongoose)
+target_compile_definitions(mongoose PUBLIC MG_ENABLE_LOG=0)
+set_source_files_properties(third_party/mongoose/mongoose.c
+    PROPERTIES COMPILE_FLAGS "-w"
+)
+
+# Third-party: cJSON (JSON parsing)
+add_library(cjson STATIC third_party/cjson/cJSON.c)
+target_include_directories(cjson PUBLIC ${CMAKE_SOURCE_DIR}/third_party/cjson)
+set_source_files_properties(third_party/cjson/cJSON.c
+    PROPERTIES COMPILE_FLAGS "-w"
+)
+
 # Runtime static library
 add_library(esu_runtime STATIC
     runtime/esu_runtime.c
@@ -21,9 +36,15 @@ add_library(esu_runtime STATIC
     runtime/esu_math.c
     runtime/esu_file.c
     runtime/esu_method.c
+    runtime/esu_json.c
+    runtime/esu_http.c
 )
-target_link_libraries(esu_runtime PRIVATE m)
-target_include_directories(esu_runtime PUBLIC ${CMAKE_SOURCE_DIR}/runtime)
+target_link_libraries(esu_runtime PRIVATE m mongoose cjson)
+target_include_directories(esu_runtime PUBLIC
+    ${CMAKE_SOURCE_DIR}/runtime
+    ${CMAKE_SOURCE_DIR}/third_party/mongoose
+    ${CMAKE_SOURCE_DIR}/third_party/cjson
+)
 
 # Esu compiler executable
 add_executable(esu

@@ -235,6 +235,8 @@ static void resolve_node(ASTNode *node, NameTable *funcs);
 static int looks_conjugated(const char *word) {
     int len = strlen(word);
     if (len < 4) return 0;
+    /* Hyphenated identifiers are compound names, not verbs */
+    if (strchr(word, '-')) return 0;
     if (len > 4 && strcmp(word + len - 4, "ying") == 0) return 1;
     if (len > 3 && strcmp(word + len - 3, "ing") == 0) return 1;
     if (len > 3 && strcmp(word + len - 3, "ied") == 0) return 1;

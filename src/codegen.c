@@ -128,6 +128,7 @@ static void emit_c_string(CodeGen *cg, const char *s) {
 /* Forward declaration */
 static void gen_expression(CodeGen *cg, ASTNode *node);
 static void gen_statement(CodeGen *cg, ASTNode *node);
+static void gen_block(CodeGen *cg, NodeList *list);
 
 static void gen_expression(CodeGen *cg, ASTNode *node) {
     switch (node->type) {
@@ -312,7 +313,7 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                     "    EsuValue *var_%s = _argc > %d ? _args[%d] : esu_nothing();\n",
                     node->as.lambda.params[i], i, i);
             }
-            /* Body: if single expression, return it */
+            /* Body: single expression or block of statements */
             if (node->as.lambda.body_expr) {
                 emit_hoisted(cg, "    return ");
                 /* Temporarily redirect main output to hoisted to emit expression */
@@ -330,6 +331,26 @@ static void gen_expression(CodeGen *cg, ASTNode *node) {
                 cg->output_len = saved_len;
                 cg->output_cap = saved_cap;
                 emit_hoisted(cg, ";\n");
+            } else if (node->as.lambda.body.count > 0) {
+                /* Block body — redirect output to hoisted buffer */
+                char *saved_output = cg->output;
+                int saved_len = cg->output_len;
+                int saved_cap = cg->output_cap;
+                int saved_indent = cg->indent;
+                cg->output = cg->hoisted;
+                cg->output_len = cg->hoisted_len;
+                cg->output_cap = cg->hoisted_cap;
+                cg->indent = 1;
+                gen_block(cg, &node->as.lambda.body);
+                emit_indent(cg);
+                emit(cg, "return esu_nothing();\n");
+                cg->hoisted = cg->output;
+                cg->hoisted_len = cg->output_len;
+                cg->hoisted_cap = cg->output_cap;
+                cg->output = saved_output;
+                cg->output_len = saved_len;
+                cg->output_cap = saved_cap;
+                cg->indent = saved_indent;
             } else {
                 emit_hoisted(cg, "    return esu_nothing();\n");
             }

@@ -1,0 +1,27 @@
+-- JSON stringify from Esu values
+person is {"name": "Alice", "age": 30}
+json-string is person as json
+display json-string
+
+-- JSON parse from string
+data is json-string parsed as json
+display data
+display data["name"]
+display data["age"]
+
+-- Lists in JSON
+scores is [90, 85, 92]
+display scores as json
+
+-- Nested structures
+config is {"host": "localhost", "port": 3000}
+display config as json
+
+-- Round-trip
+original is {"items": [1, 2, 3], "active": true}
+as-text is original as json
+back-again is as-text parsed as json
+display back-again["items"]
+display back-again["active"]
+
+display "JSON tests passed"
