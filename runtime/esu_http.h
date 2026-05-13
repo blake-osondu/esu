@@ -21,5 +21,7 @@ EsuValue *esu_http_req_path(EsuValue *request);
 EsuValue *esu_http_req_method(EsuValue *request);
 EsuValue *esu_http_req_body(EsuValue *request);
 EsuValue *esu_http_req_header(EsuValue *request, EsuValue *name);
+EsuValue *esu_http_req_query(EsuValue *request, EsuValue *name);
+EsuValue *esu_http_req_route_param(EsuValue *request, EsuValue *name);
 
 #endif

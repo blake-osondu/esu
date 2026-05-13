@@ -145,6 +145,133 @@ typedef struct {
 
 static ServerCtx *active_server = NULL;
 
+/* Hex digit → int. Returns -1 on invalid. */
+static int hex_val(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+/* URL-decode src[0..len) into a freshly allocated NUL-terminated string. */
+static char *url_decode(const char *src, int len) {
+    char *out = esu_alloc(len + 1);
+    int j = 0;
+    for (int i = 0; i < len; i++) {
+        char c = src[i];
+        if (c == '+') {
+            out[j++] = ' ';
+        } else if (c == '%' && i + 2 < len) {
+            int hi = hex_val((unsigned char)src[i + 1]);
+            int lo = hex_val((unsigned char)src[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out[j++] = (char)((hi << 4) | lo);
+                i += 2;
+            } else {
+                out[j++] = c;
+            }
+        } else {
+            out[j++] = c;
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+/* Parse "k1=v1&k2=v2" into a map. Empty/missing values become "". */
+static EsuValue *parse_query_string(const char *src, int len) {
+    EsuValue *map = esu_map_new();
+    int i = 0;
+    while (i < len) {
+        int key_start = i;
+        while (i < len && src[i] != '=' && src[i] != '&') i++;
+        int key_end = i;
+        int val_start = i, val_end = i;
+        if (i < len && src[i] == '=') {
+            i++;
+            val_start = i;
+            while (i < len && src[i] != '&') i++;
+            val_end = i;
+        }
+        if (key_end > key_start) {
+            char *k = url_decode(src + key_start, key_end - key_start);
+            char *v = url_decode(src + val_start, val_end - val_start);
+            EsuValue *kv = esu_string(k);
+            EsuValue *vv = esu_string(v);
+            esu_map_set(map, kv, vv);
+            esu_release(kv);
+            esu_release(vv);
+            esu_free(k);
+            esu_free(v);
+        }
+        if (i < len && src[i] == '&') i++;
+    }
+    return map;
+}
+
+/* Parse mongoose headers into a map (case-preserved, last-wins). */
+static EsuValue *parse_headers(struct mg_http_message *hm) {
+    EsuValue *map = esu_map_new();
+    for (size_t i = 0; i < sizeof(hm->headers) / sizeof(hm->headers[0]); i++) {
+        if (hm->headers[i].name.len == 0) break;
+        char name_buf[256];
+        char val_buf[1024];
+        snprintf(name_buf, sizeof(name_buf), "%.*s",
+                 (int)hm->headers[i].name.len, hm->headers[i].name.buf);
+        snprintf(val_buf, sizeof(val_buf), "%.*s",
+                 (int)hm->headers[i].value.len, hm->headers[i].value.buf);
+        EsuValue *k = esu_string(name_buf);
+        EsuValue *v = esu_string(val_buf);
+        esu_map_set(map, k, v);
+        esu_release(k);
+        esu_release(v);
+    }
+    return map;
+}
+
+/* Match request path against a route pattern with :name or {name} placeholders.
+ * On match, returns a freshly allocated map of captured params (caller releases).
+ * On no match, returns NULL. */
+static EsuValue *match_route(const char *pattern, const char *path) {
+    EsuValue *params = esu_map_new();
+    const char *p = pattern;
+    const char *u = path;
+    while (*p && *u) {
+        if (*p == ':' || *p == '{') {
+            char close = (*p == '{') ? '}' : '/';
+            p++;
+            const char *name_start = p;
+            while (*p && *p != close && !(*p == '/' && close != '/')) p++;
+            int name_len = (int)(p - name_start);
+            if (close == '}' && *p == '}') p++;
+            const char *val_start = u;
+            while (*u && *u != '/') u++;
+            int val_len = (int)(u - val_start);
+            char name_buf[128];
+            int n = name_len < (int)sizeof(name_buf) - 1 ? name_len : (int)sizeof(name_buf) - 1;
+            memcpy(name_buf, name_start, n);
+            name_buf[n] = '\0';
+            char *val = esu_alloc(val_len + 1);
+            memcpy(val, val_start, val_len);
+            val[val_len] = '\0';
+            EsuValue *k = esu_string(name_buf);
+            EsuValue *v = esu_string(val);
+            esu_map_set(params, k, v);
+            esu_release(k);
+            esu_release(v);
+            esu_free(val);
+        } else if (*p == *u) {
+            p++; u++;
+        } else {
+            esu_release(params);
+            return NULL;
+        }
+    }
+    if (*p == '\0' && *u == '\0') return params;
+    esu_release(params);
+    return NULL;
+}
+
 /* Build a request map from mongoose's http message */
 static EsuValue *build_request(struct mg_http_message *hm) {
     EsuValue *req = esu_map_new();
@@ -171,7 +298,53 @@ static EsuValue *build_request(struct mg_http_message *hm) {
         esu_map_set(req, esu_string("body"), esu_string(""));
     }
 
+    /* Query string */
+    EsuValue *query = parse_query_string(hm->query.buf, (int)hm->query.len);
+    esu_map_set(req, esu_string("query"), query);
+    esu_release(query);
+
+    /* Headers */
+    EsuValue *headers = parse_headers(hm);
+    esu_map_set(req, esu_string("headers"), headers);
+    esu_release(headers);
+
+    /* Route params placeholder — populated by server_fn after route match */
+    EsuValue *params = esu_map_new();
+    esu_map_set(req, esu_string("params"), params);
+    esu_release(params);
+
     return req;
+}
+
+/* Build "Header-Name: value\r\n..." string from a headers map.
+ * Caller frees. Always includes a trailing CRLF chunk per header. */
+static char *build_response_headers(EsuValue *headers_map, int *has_content_type) {
+    *has_content_type = 0;
+    if (!headers_map || headers_map->type != VAL_MAP) {
+        return esu_strdup("");
+    }
+    EsuMap *map = headers_map->as.map;
+    /* Estimate buffer */
+    size_t cap = 256;
+    char *buf = esu_alloc(cap);
+    buf[0] = '\0';
+    size_t len = 0;
+    for (int i = 0; i < map->count; i++) {
+        char *vstr = esu_to_cstring(map->entries[i].value);
+        size_t need = strlen(map->entries[i].key) + strlen(vstr) + 8;
+        while (len + need >= cap) {
+            cap *= 2;
+            buf = esu_realloc(buf, cap);
+        }
+        if (strcasecmp(map->entries[i].key, "Content-Type") == 0) {
+            *has_content_type = 1;
+        }
+        int written = snprintf(buf + len, cap - len, "%s: %s\r\n",
+                               map->entries[i].key, vstr);
+        len += (size_t)written;
+        esu_free(vstr);
+    }
+    return buf;
 }
 
 static void server_fn(struct mg_connection *c, int ev, void *ev_data) {
@@ -179,39 +352,73 @@ static void server_fn(struct mg_connection *c, int ev, void *ev_data) {
     struct mg_http_message *hm = (struct mg_http_message *)ev_data;
     ServerCtx *ctx = (ServerCtx *)c->fn_data;
 
+    /* URI as null-terminated for our matcher */
+    char uri_buf[2048];
+    snprintf(uri_buf, sizeof(uri_buf), "%.*s", (int)hm->uri.len, hm->uri.buf);
+
     /* Find matching route */
     for (int i = 0; i < ctx->route_count; i++) {
         Route *r = &ctx->routes[i];
         /* Match method (or "*" for any) */
         int method_match = (strcmp(r->method, "*") == 0) ||
             (mg_strcmp(hm->method, mg_str(r->method)) == 0);
-        /* Match path */
-        int path_match = (mg_match(hm->uri, mg_str(r->path), NULL));
+        if (!method_match) continue;
 
-        if (method_match && path_match) {
+        /* Try our placeholder-aware matcher first; fall back to mg_match for *,# */
+        EsuValue *route_params = match_route(r->path, uri_buf);
+        int matched = (route_params != NULL);
+        if (!matched) {
+            if (mg_match(hm->uri, mg_str(r->path), NULL)) {
+                matched = 1;
+                route_params = esu_map_new();
+            }
+        }
+
+        if (matched) {
             EsuValue *request = build_request(hm);
+            esu_map_set(request, esu_string("params"), route_params);
+            esu_release(route_params);
+
             EsuValue *args[1] = { request };
             EsuValue *response = esu_call(r->handler, args, 1);
 
-            /* Response can be a string or a map with status + body */
+            int code = 200;
+            char *body_str = NULL;
+            char *extra_headers = esu_strdup("");
+            int has_content_type = 0;
+
             if (response && response->type == VAL_MAP) {
                 EsuValue *status = esu_map_get(response, esu_string("status"));
                 EsuValue *body = esu_map_get(response, esu_string("body"));
-                int code = (status && status->type == VAL_NUMBER) ?
-                           (int)status->as.number : 200;
-                char *body_str = body ? esu_to_cstring(body) : esu_strdup("");
-                mg_http_reply(c, code, "Content-Type: text/plain\r\n",
-                             "%s", body_str);
-                esu_free(body_str);
+                EsuValue *headers = esu_map_get(response, esu_string("headers"));
+                if (status && status->type == VAL_NUMBER) {
+                    code = (int)status->as.number;
+                }
+                body_str = body ? esu_to_cstring(body) : esu_strdup("");
+                esu_free(extra_headers);
+                extra_headers = build_response_headers(headers, &has_content_type);
                 if (status) esu_release(status);
                 if (body) esu_release(body);
+                if (headers) esu_release(headers);
             } else if (response && response->type == VAL_STRING) {
-                mg_http_reply(c, 200, "Content-Type: text/plain\r\n",
-                             "%s", response->as.string);
+                body_str = esu_strdup(response->as.string);
             } else {
-                mg_http_reply(c, 200, "", "");
+                body_str = esu_strdup("");
             }
 
+            /* If user didn't set Content-Type, default to text/plain */
+            char headers_with_default[2048];
+            if (has_content_type) {
+                snprintf(headers_with_default, sizeof(headers_with_default),
+                         "%s", extra_headers);
+            } else {
+                snprintf(headers_with_default, sizeof(headers_with_default),
+                         "Content-Type: text/plain\r\n%s", extra_headers);
+            }
+            mg_http_reply(c, code, headers_with_default, "%s", body_str);
+
+            esu_free(body_str);
+            esu_free(extra_headers);
             if (response) esu_release(response);
             esu_release(request);
             return;
@@ -315,7 +522,54 @@ EsuValue *esu_http_req_body(EsuValue *request) {
 }
 
 EsuValue *esu_http_req_header(EsuValue *request, EsuValue *name) {
-    (void)request; (void)name;
-    /* TODO: parse headers from request */
+    EsuValue *headers = esu_map_get(request, esu_string("headers"));
+    if (!headers || headers->type != VAL_MAP) {
+        if (headers) esu_release(headers);
+        return esu_string("");
+    }
+    /* Case-insensitive lookup */
+    if (name->type != VAL_STRING) {
+        esu_release(headers);
+        return esu_string("");
+    }
+    EsuMap *map = headers->as.map;
+    for (int i = 0; i < map->count; i++) {
+        if (strcasecmp(map->entries[i].key, name->as.string) == 0) {
+            EsuValue *v = esu_retain(map->entries[i].value);
+            esu_release(headers);
+            return v;
+        }
+    }
+    esu_release(headers);
     return esu_string("");
+}
+
+EsuValue *esu_http_req_query(EsuValue *request, EsuValue *name) {
+    EsuValue *query = esu_map_get(request, esu_string("query"));
+    if (!query || query->type != VAL_MAP) {
+        if (query) esu_release(query);
+        return esu_string("");
+    }
+    EsuValue *v = esu_map_get(query, name);
+    esu_release(query);
+    if (!v || v->type == VAL_NOTHING) {
+        if (v) esu_release(v);
+        return esu_string("");
+    }
+    return v;
+}
+
+EsuValue *esu_http_req_route_param(EsuValue *request, EsuValue *name) {
+    EsuValue *params = esu_map_get(request, esu_string("params"));
+    if (!params || params->type != VAL_MAP) {
+        if (params) esu_release(params);
+        return esu_string("");
+    }
+    EsuValue *v = esu_map_get(params, name);
+    esu_release(params);
+    if (!v || v->type == VAL_NOTHING) {
+        if (v) esu_release(v);
+        return esu_string("");
+    }
+    return v;
 }
