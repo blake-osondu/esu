@@ -689,18 +689,162 @@ static ASTNode *parse_primary(Parser *p) {
         }
     }
 
-    /* --- HTTP client builtins (prefix) --- */
-    /* "fetch URL" / "fetch the contents of URL" */
-    if (check_word(p, "fetch") && p->pos + 1 < p->count) {
-        Token *t = advance_parser(p);
-        if (check_word(p, "the")) advance_parser(p);
-        if (check_word(p, "contents")) advance_parser(p);
-        if (check_word(p, "of")) advance_parser(p);
-        ASTNode *url = parse_postfix(p);
-        ASTNode **args = malloc(sizeof(ASTNode *));
-        args[0] = url;
-        return make_builtin_call("__http_get", args, 1, t->line, t->col);
+    /* --- HTTP client builtins (prefix) ---
+     *   fetch URL [with headers MAP]
+     *   get URL [with headers MAP]
+     *   delete URL [with headers MAP]
+     *   post BODY to URL [as json] [with headers MAP]
+     *   put BODY to URL [as json] [with headers MAP]
+     *   patch BODY to URL [as json] [with headers MAP]
+     *
+     * Simple cases (no headers) emit the wrapper builtins (__http_get/post/...).
+     * Any options trigger __http_request(METHOD, URL, OPTIONS_MAP). */
+    {
+        const char *method = NULL;
+        int needs_body = 0;
+        int is_fetch_sugar = 0;
+        if (check_word(p, "fetch")) { method = "GET"; is_fetch_sugar = 1; }
+        else if (check_word(p, "get")) { method = "GET"; }
+        else if (check_word(p, "delete")) { method = "DELETE"; }
+        else if (check_word(p, "post")) { method = "POST"; needs_body = 1; }
+        else if (check_word(p, "put")) { method = "PUT"; needs_body = 1; }
+        else if (check_word(p, "patch")) { method = "PATCH"; needs_body = 1; }
+
+        if (method && p->pos + 1 < p->count) {
+            /* Disambiguation guard. To avoid swallowing common identifiers
+             * named get/post/put/patch/delete, only trigger when the *next*
+             * token clearly starts a URL/body expression:
+             *   - a string literal:  get "https://…"
+             *   - an open bracket/brace:  post {...} to …
+             *   - "the"/"contents" for fetch sugar
+             *   - a known builtin prefix word like 'fetch'
+             * Bare-identifier follow-ups are also allowed when there's a
+             * subsequent "to" / "with headers" within a few tokens. */
+            const char *peek = p->tokens[p->pos + 1].value;
+            int next_is_string = p->tokens[p->pos + 1].type == TOK_STRING;
+            int next_is_open = p->tokens[p->pos + 1].type == TOK_LBRACE ||
+                               p->tokens[p->pos + 1].type == TOK_LBRACKET;
+            int next_is_fetch_sugar = is_fetch_sugar && peek &&
+                                      (strcmp(peek, "the") == 0 ||
+                                       strcmp(peek, "contents") == 0 ||
+                                       strcmp(peek, "of") == 0);
+            /* Look-ahead for "to" or "with headers" within a small window. */
+            int has_followup = 0;
+            for (int k = p->pos + 1; k < p->count && k < p->pos + 8; k++) {
+                if (p->tokens[k].type == TOK_NEWLINE) break;
+                if (p->tokens[k].type == TOK_WORD &&
+                    (strcmp(p->tokens[k].value, "to") == 0 ||
+                     (strcmp(p->tokens[k].value, "with") == 0 &&
+                      k + 1 < p->count &&
+                      p->tokens[k + 1].type == TOK_WORD &&
+                      strcmp(p->tokens[k + 1].value, "headers") == 0))) {
+                    has_followup = 1; break;
+                }
+            }
+            if (!next_is_string && !next_is_open && !next_is_fetch_sugar &&
+                !has_followup) {
+                goto not_http_client;
+            }
+
+            int saved = p->pos;
+            Token *t = advance_parser(p); /* the method/verb word */
+
+            /* fetch sugar: optional "the contents of" */
+            if (is_fetch_sugar) {
+                if (check_word(p, "the")) advance_parser(p);
+                if (check_word(p, "contents")) advance_parser(p);
+                if (check_word(p, "of")) advance_parser(p);
+            }
+
+            ASTNode *body = NULL;
+            ASTNode *url = NULL;
+
+            if (needs_body) {
+                /* "post BODY to URL"   — body comes first, then 'to URL' */
+                body = parse_comparison(p);
+                if (!check_word(p, "to")) {
+                    /* Not a real post/put/patch — backtrack. */
+                    if (body) ast_free(body);
+                    p->pos = saved;
+                    goto not_http_client;
+                }
+                advance_parser(p); /* to */
+                url = parse_primary(p);
+            } else {
+                url = parse_primary(p);
+            }
+
+            /* Optional "as json" (force-encode the body as JSON) */
+            int force_json = 0;
+            if (needs_body && check_two_words(p, "as", "json")) {
+                advance_parser(p); advance_parser(p);
+                force_json = 1;
+            }
+
+            /* Optional "with headers MAP" */
+            ASTNode *headers_map = NULL;
+            if (check_word(p, "with") && p->pos + 1 < p->count &&
+                p->tokens[p->pos + 1].type == TOK_WORD &&
+                strcmp(p->tokens[p->pos + 1].value, "headers") == 0) {
+                advance_parser(p); /* with */
+                advance_parser(p); /* headers */
+                headers_map = parse_comparison(p);
+            }
+
+            int has_options = (headers_map != NULL) || force_json;
+            if (!has_options) {
+                /* Simple path: use the bare wrapper builtin. */
+                if (needs_body) {
+                    char wrapper[32];
+                    snprintf(wrapper, sizeof(wrapper), "__http_%s",
+                             /* lowercase the method name */
+                             strcmp(method, "POST") == 0 ? "post" :
+                             strcmp(method, "PUT") == 0  ? "put"  :
+                             strcmp(method, "PATCH") == 0 ? "patch" : "post");
+                    ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                    args[0] = url; args[1] = body;
+                    return make_builtin_call(wrapper, args, 2, t->line, t->col);
+                } else {
+                    const char *wrapper = strcmp(method, "DELETE") == 0
+                        ? "__http_delete" : "__http_get";
+                    ASTNode **args = malloc(sizeof(ASTNode *));
+                    args[0] = url;
+                    return make_builtin_call(wrapper, args, 1, t->line, t->col);
+                }
+            }
+
+            /* Build options map AST: { body?: ..., headers?: ..., json?: true } */
+            int n = 0;
+            char *keys[3] = {NULL};
+            ASTNode *values[3] = {NULL};
+            if (body) {
+                keys[n] = str_dup_parser("body");
+                values[n] = body;
+                n++;
+            }
+            if (headers_map) {
+                keys[n] = str_dup_parser("headers");
+                values[n] = headers_map;
+                n++;
+            }
+            if (force_json) {
+                keys[n] = str_dup_parser("json");
+                values[n] = ast_bool_lit(1, t->line, t->col);
+                n++;
+            }
+            char **keys_buf = malloc(sizeof(char *) * n);
+            ASTNode **vals_buf = malloc(sizeof(ASTNode *) * n);
+            for (int i = 0; i < n; i++) { keys_buf[i] = keys[i]; vals_buf[i] = values[i]; }
+            ASTNode *options = ast_map_lit(keys_buf, vals_buf, n, t->line, t->col);
+
+            ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+            args[0] = ast_string_lit(method, t->line, t->col);
+            args[1] = url;
+            args[2] = options;
+            return make_builtin_call("__http_request", args, 3, t->line, t->col);
+        }
     }
+    not_http_client:
 
     /* "a new http server on port N" */
     if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 3 < p->count) {
