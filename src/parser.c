@@ -635,6 +635,8 @@ static ASTNode *parse_primary(Parser *p) {
      *   "route parameter NAME"         → __http_req_route_param(request, NAME)
      *   "path parameter NAME"          → __http_req_route_param(request, NAME)
      *   "url parameter NAME"           → __http_req_route_param(request, NAME)
+     *   "request cookie NAME"          → __http_req_cookie(request, NAME)
+     *   "cookie NAME"                  → __http_req_cookie(request, NAME)
      * NAME may be a string literal or a variable. */
     {
         int saved = p->pos;
@@ -645,9 +647,13 @@ static ASTNode *parse_primary(Parser *p) {
             const char *w1 = p->tokens[p->pos + 1].value;
             if (strcmp(w1, "header") == 0) { builtin = "__http_req_header"; consumed = 2; }
             else if (strcmp(w1, "query") == 0) { builtin = "__http_req_query"; consumed = 2; }
+            else if (strcmp(w1, "cookie") == 0) { builtin = "__http_req_cookie"; consumed = 2; }
         }
         if (!builtin && check_word(p, "header")) {
             builtin = "__http_req_header"; consumed = 1;
+        }
+        if (!builtin && check_word(p, "cookie")) {
+            builtin = "__http_req_cookie"; consumed = 1;
         }
         if (!builtin && check_word(p, "query") && p->pos + 1 < p->count) {
             const char *w1 = p->tokens[p->pos + 1].value;
@@ -700,8 +706,7 @@ static ASTNode *parse_primary(Parser *p) {
     if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 3 < p->count) {
         int saved = p->pos;
         advance_parser(p); /* a/an */
-        int had_new = 0;
-        if (check_word(p, "new")) { advance_parser(p); had_new = 1; }
+        if (check_word(p, "new")) advance_parser(p);
         if (check_word(p, "http") || check_word(p, "web")) {
             advance_parser(p);
             if (check_word(p, "server")) {
@@ -2384,6 +2389,80 @@ static ASTNode *parse_statement(Parser *p) {
         p->pos = saved;
     }
 
+    /* "serve (static) files from DIR [at PREFIX]" → __http_serve_static(server, DIR, PREFIX?) */
+    if (check_word(p, "serve") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* serve */
+        if (check_word(p, "static")) advance_parser(p);
+        if (check_word(p, "files") || check_word(p, "file") ||
+            check_word(p, "content") || check_word(p, "assets")) advance_parser(p);
+        if (check_word(p, "from") || check_word(p, "in")) {
+            advance_parser(p);
+            ASTNode *dir = parse_comparison(p);
+            ASTNode *prefix = NULL;
+            if (check_word(p, "at") || check_word(p, "under") || check_word(p, "on")) {
+                advance_parser(p);
+                prefix = parse_comparison(p);
+            }
+            int argc = prefix ? 3 : 2;
+            ASTNode **args = malloc(sizeof(ASTNode *) * argc);
+            args[0] = ast_identifier("server", t->line, t->col);
+            args[1] = dir;
+            if (prefix) args[2] = prefix;
+            return make_builtin_call("__http_serve_static", args, argc, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+
+    /* "before every request[,] [do] BLOCK end" — middleware hook.
+     * Desugars to: __http_set_before_hook(server, lambda(request) BLOCK) */
+    if (check_word(p, "before") && p->pos + 2 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* before */
+        if (check_word(p, "every") || check_word(p, "each") || check_word(p, "any"))
+            advance_parser(p);
+        if (check_word(p, "request") || check_word(p, "route") || check_word(p, "handler")) {
+            advance_parser(p);
+            if (check_type(p, TOK_COMMA)) advance_parser(p);
+            if (check_word(p, "do")) advance_parser(p);
+            skip_separators(p);
+
+            NodeList body;
+            parse_block(p, &body);
+            expect_block_end(p, "before-request hook");
+
+            char **params = malloc(sizeof(char *));
+            params[0] = str_dup_parser("request");
+            ASTNode *lambda_node = ast_lambda(params, 1, NULL, t->line, t->col);
+            lambda_node->as.lambda.body = body;
+
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = ast_identifier("server", t->line, t->col);
+            args[1] = lambda_node;
+            return make_builtin_call("__http_set_before_hook", args, 2, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+
+    /* "redirect [permanently] to EXPR" → return __http_redirect(EXPR, permanent?) */
+    if (check_word(p, "redirect") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* redirect */
+        int permanent = 0;
+        if (check_word(p, "permanently")) { advance_parser(p); permanent = 1; }
+        else if (check_word(p, "temporarily")) { advance_parser(p); }
+        if (check_word(p, "to")) {
+            advance_parser(p);
+            ASTNode *url = parse_comparison(p);
+            ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+            args[0] = url;
+            args[1] = ast_bool_lit(permanent, t->line, t->col);
+            ASTNode *call = make_builtin_call("__http_redirect", args, 2, t->line, t->col);
+            return ast_return(call, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+
     /* --- Statement-level multi-phrasing for request accessors ---
      * All of these desugar to: VAR is __http_req_X(request, NAME)
      *   "the query parameter NAME maps to VAR"
@@ -2428,7 +2507,8 @@ static ASTNode *parse_statement(Parser *p) {
                 int is_accessor =
                     strcmp(w, "query") == 0 || strcmp(w, "header") == 0 ||
                     strcmp(w, "route") == 0 || strcmp(w, "path") == 0 ||
-                    strcmp(w, "url") == 0 || strcmp(w, "request") == 0;
+                    strcmp(w, "url") == 0 || strcmp(w, "request") == 0 ||
+                    strcmp(w, "cookie") == 0;
                 if (is_accessor) {
                     advance_parser(p); /* the */
                     int acc_start = p->pos;

@@ -8,6 +8,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
+#include <strings.h>   /* strcasecmp */
 
 /* ===== HTTP CLIENT ===== */
 
@@ -141,6 +143,9 @@ typedef struct {
     int route_count;
     int route_capacity;
     int port;
+    char *static_dir;       /* directory to serve static files from, or NULL */
+    char *static_prefix;    /* URL prefix the static dir is mounted at, or NULL ("/") */
+    EsuValue *before_hook;  /* closure run before every request, or NULL */
 } ServerCtx;
 
 static ServerCtx *active_server = NULL;
@@ -205,6 +210,42 @@ static EsuValue *parse_query_string(const char *src, int len) {
             esu_free(v);
         }
         if (i < len && src[i] == '&') i++;
+    }
+    return map;
+}
+
+/* Parse a "Cookie: a=1; b=2" header value into a map. */
+static EsuValue *parse_cookies(struct mg_http_message *hm) {
+    EsuValue *map = esu_map_new();
+    struct mg_str *cookie = mg_http_get_header(hm, "Cookie");
+    if (!cookie) return map;
+    const char *src = cookie->buf;
+    int len = (int)cookie->len;
+    int i = 0;
+    while (i < len) {
+        /* skip leading spaces / semicolons */
+        while (i < len && (src[i] == ' ' || src[i] == ';')) i++;
+        int key_start = i;
+        while (i < len && src[i] != '=' && src[i] != ';') i++;
+        int key_end = i;
+        int val_start = i, val_end = i;
+        if (i < len && src[i] == '=') {
+            i++;
+            val_start = i;
+            while (i < len && src[i] != ';') i++;
+            val_end = i;
+        }
+        if (key_end > key_start) {
+            char *k = url_decode(src + key_start, key_end - key_start);
+            char *v = url_decode(src + val_start, val_end - val_start);
+            EsuValue *kv = esu_string(k);
+            EsuValue *vv = esu_string(v);
+            esu_map_set(map, kv, vv);
+            esu_release(kv);
+            esu_release(vv);
+            esu_free(k);
+            esu_free(v);
+        }
     }
     return map;
 }
@@ -308,6 +349,11 @@ static EsuValue *build_request(struct mg_http_message *hm) {
     esu_map_set(req, esu_string("headers"), headers);
     esu_release(headers);
 
+    /* Cookies */
+    EsuValue *cookies = parse_cookies(hm);
+    esu_map_set(req, esu_string("cookies"), cookies);
+    esu_release(cookies);
+
     /* Route params placeholder — populated by server_fn after route match */
     EsuValue *params = esu_map_new();
     esu_map_set(req, esu_string("params"), params);
@@ -316,35 +362,105 @@ static EsuValue *build_request(struct mg_http_message *hm) {
     return req;
 }
 
-/* Build "Header-Name: value\r\n..." string from a headers map.
- * Caller frees. Always includes a trailing CRLF chunk per header. */
-static char *build_response_headers(EsuValue *headers_map, int *has_content_type) {
-    *has_content_type = 0;
-    if (!headers_map || headers_map->type != VAL_MAP) {
-        return esu_strdup("");
+/* Append to a growing heap string. Updates *buf, *cap, *len. */
+static void str_append(char **buf, size_t *cap, size_t *len, const char *fmt, ...) {
+    va_list ap;
+    for (;;) {
+        va_start(ap, fmt);
+        int n = vsnprintf(*buf + *len, *cap - *len, fmt, ap);
+        va_end(ap);
+        if (n < 0) return;
+        if ((size_t)n < *cap - *len) { *len += (size_t)n; return; }
+        *cap = (*cap + (size_t)n + 1) * 2;
+        *buf = esu_realloc(*buf, *cap);
     }
-    EsuMap *map = headers_map->as.map;
-    /* Estimate buffer */
-    size_t cap = 256;
+}
+
+/* Build "Header-Name: value\r\n..." for a headers map plus a cookies map.
+ * Sets *has_content_type if the headers map contains Content-Type.
+ * Caller frees the returned string. */
+static char *build_response_headers(EsuValue *headers_map, EsuValue *cookies_map,
+                                    int *has_content_type) {
+    *has_content_type = 0;
+    size_t cap = 256, len = 0;
     char *buf = esu_alloc(cap);
     buf[0] = '\0';
-    size_t len = 0;
-    for (int i = 0; i < map->count; i++) {
-        char *vstr = esu_to_cstring(map->entries[i].value);
-        size_t need = strlen(map->entries[i].key) + strlen(vstr) + 8;
-        while (len + need >= cap) {
-            cap *= 2;
-            buf = esu_realloc(buf, cap);
+
+    if (headers_map && headers_map->type == VAL_MAP) {
+        EsuMap *map = headers_map->as.map;
+        for (int i = 0; i < map->count; i++) {
+            char *vstr = esu_to_cstring(map->entries[i].value);
+            if (strcasecmp(map->entries[i].key, "Content-Type") == 0) {
+                *has_content_type = 1;
+            }
+            str_append(&buf, &cap, &len, "%s: %s\r\n", map->entries[i].key, vstr);
+            esu_free(vstr);
         }
-        if (strcasecmp(map->entries[i].key, "Content-Type") == 0) {
-            *has_content_type = 1;
+    }
+    if (cookies_map && cookies_map->type == VAL_MAP) {
+        EsuMap *map = cookies_map->as.map;
+        for (int i = 0; i < map->count; i++) {
+            char *vstr = esu_to_cstring(map->entries[i].value);
+            /* Sensible defaults: site-wide path, HttpOnly */
+            str_append(&buf, &cap, &len, "Set-Cookie: %s=%s; Path=/; HttpOnly\r\n",
+                       map->entries[i].key, vstr);
+            esu_free(vstr);
         }
-        int written = snprintf(buf + len, cap - len, "%s: %s\r\n",
-                               map->entries[i].key, vstr);
-        len += (size_t)written;
-        esu_free(vstr);
     }
     return buf;
+}
+
+/* Send an EsuValue response (string, map with status/body/headers/cookies, or
+ * nothing) over the connection. Consumes nothing — caller still owns `response`. */
+static void send_esu_response(struct mg_connection *c, EsuValue *response) {
+    int code = 200;
+    char *body_str = NULL;
+    char *extra_headers = esu_strdup("");
+    int has_content_type = 0;
+
+    if (response && response->type == VAL_MAP) {
+        EsuValue *status = esu_map_get(response, esu_string("status"));
+        EsuValue *body = esu_map_get(response, esu_string("body"));
+        EsuValue *headers = esu_map_get(response, esu_string("headers"));
+        EsuValue *cookies = esu_map_get(response, esu_string("cookies"));
+        if (status && status->type == VAL_NUMBER) code = (int)status->as.number;
+        body_str = (body && body->type != VAL_NOTHING) ? esu_to_cstring(body)
+                                                       : esu_strdup("");
+        esu_free(extra_headers);
+        extra_headers = build_response_headers(headers, cookies, &has_content_type);
+        if (status) esu_release(status);
+        if (body) esu_release(body);
+        if (headers) esu_release(headers);
+        if (cookies) esu_release(cookies);
+    } else if (response && response->type == VAL_STRING) {
+        body_str = esu_strdup(response->as.string);
+    } else {
+        body_str = esu_strdup("");
+    }
+
+    /* Default Content-Type unless the handler set one (and unless body empty,
+     * e.g. a bare redirect). */
+    size_t hcap = 512, hlen = 0;
+    char *hbuf = esu_alloc(hcap);
+    hbuf[0] = '\0';
+    if (!has_content_type && body_str[0] != '\0') {
+        str_append(&hbuf, &hcap, &hlen, "Content-Type: text/plain\r\n");
+    }
+    str_append(&hbuf, &hcap, &hlen, "%s", extra_headers);
+    mg_http_reply(c, code, hbuf, "%s", body_str);
+
+    esu_free(hbuf);
+    esu_free(body_str);
+    esu_free(extra_headers);
+}
+
+/* True if `response` represents an actual response the server should send
+ * (a string or a non-empty map), as opposed to "nothing"/empty. */
+static int is_real_response(EsuValue *response) {
+    if (!response) return 0;
+    if (response->type == VAL_STRING) return 1;
+    if (response->type == VAL_MAP && response->as.map->count > 0) return 1;
+    return 0;
 }
 
 static void server_fn(struct mg_connection *c, int ev, void *ev_data) {
@@ -356,76 +472,73 @@ static void server_fn(struct mg_connection *c, int ev, void *ev_data) {
     char uri_buf[2048];
     snprintf(uri_buf, sizeof(uri_buf), "%.*s", (int)hm->uri.len, hm->uri.buf);
 
-    /* Find matching route */
-    for (int i = 0; i < ctx->route_count; i++) {
-        Route *r = &ctx->routes[i];
-        /* Match method (or "*" for any) */
-        int method_match = (strcmp(r->method, "*") == 0) ||
-            (mg_strcmp(hm->method, mg_str(r->method)) == 0);
-        if (!method_match) continue;
-
-        /* Try our placeholder-aware matcher first; fall back to mg_match for *,# */
-        EsuValue *route_params = match_route(r->path, uri_buf);
-        int matched = (route_params != NULL);
-        if (!matched) {
-            if (mg_match(hm->uri, mg_str(r->path), NULL)) {
-                matched = 1;
-                route_params = esu_map_new();
-            }
-        }
-
-        if (matched) {
-            EsuValue *request = build_request(hm);
-            esu_map_set(request, esu_string("params"), route_params);
-            esu_release(route_params);
-
-            EsuValue *args[1] = { request };
-            EsuValue *response = esu_call(r->handler, args, 1);
-
-            int code = 200;
-            char *body_str = NULL;
-            char *extra_headers = esu_strdup("");
-            int has_content_type = 0;
-
-            if (response && response->type == VAL_MAP) {
-                EsuValue *status = esu_map_get(response, esu_string("status"));
-                EsuValue *body = esu_map_get(response, esu_string("body"));
-                EsuValue *headers = esu_map_get(response, esu_string("headers"));
-                if (status && status->type == VAL_NUMBER) {
-                    code = (int)status->as.number;
-                }
-                body_str = body ? esu_to_cstring(body) : esu_strdup("");
-                esu_free(extra_headers);
-                extra_headers = build_response_headers(headers, &has_content_type);
-                if (status) esu_release(status);
-                if (body) esu_release(body);
-                if (headers) esu_release(headers);
-            } else if (response && response->type == VAL_STRING) {
-                body_str = esu_strdup(response->as.string);
-            } else {
-                body_str = esu_strdup("");
-            }
-
-            /* If user didn't set Content-Type, default to text/plain */
-            char headers_with_default[2048];
-            if (has_content_type) {
-                snprintf(headers_with_default, sizeof(headers_with_default),
-                         "%s", extra_headers);
-            } else {
-                snprintf(headers_with_default, sizeof(headers_with_default),
-                         "Content-Type: text/plain\r\n%s", extra_headers);
-            }
-            mg_http_reply(c, code, headers_with_default, "%s", body_str);
-
-            esu_free(body_str);
-            esu_free(extra_headers);
+    /* 1. Before-hook (middleware). If it returns a real response, send it and stop. */
+    if (ctx->before_hook) {
+        EsuValue *request = build_request(hm);
+        EsuValue *args[1] = { request };
+        EsuValue *response = esu_call(ctx->before_hook, args, 1);
+        if (is_real_response(response)) {
+            send_esu_response(c, response);
             if (response) esu_release(response);
             esu_release(request);
             return;
         }
+        if (response) esu_release(response);
+        esu_release(request);
     }
 
-    /* No matching route */
+    /* 2. Match a registered route. */
+    for (int i = 0; i < ctx->route_count; i++) {
+        Route *r = &ctx->routes[i];
+        int method_match = (strcmp(r->method, "*") == 0) ||
+            (mg_strcmp(hm->method, mg_str(r->method)) == 0);
+        if (!method_match) continue;
+
+        /* Placeholder-aware matcher first; fall back to mg_match for *,# */
+        EsuValue *route_params = match_route(r->path, uri_buf);
+        int matched = (route_params != NULL);
+        if (!matched && mg_match(hm->uri, mg_str(r->path), NULL)) {
+            matched = 1;
+            route_params = esu_map_new();
+        }
+        if (!matched) continue;
+
+        EsuValue *request = build_request(hm);
+        esu_map_set(request, esu_string("params"), route_params);
+        esu_release(route_params);
+
+        EsuValue *args[1] = { request };
+        EsuValue *response = esu_call(r->handler, args, 1);
+        send_esu_response(c, response);
+        if (response) esu_release(response);
+        esu_release(request);
+        return;
+    }
+
+    /* 3. Static file fallback. */
+    if (ctx->static_dir) {
+        const char *prefix = ctx->static_prefix ? ctx->static_prefix : "/";
+        size_t plen = strlen(prefix);
+        if (strncmp(uri_buf, prefix, plen) == 0) {
+            struct mg_http_serve_opts opts = {0};
+            opts.root_dir = ctx->static_dir;
+            if (plen > 1) {
+                /* Mounted at a sub-path: strip the prefix so files resolve. */
+                char stripped[2048];
+                const char *rest = uri_buf + plen;
+                snprintf(stripped, sizeof(stripped), "/%s",
+                         rest[0] == '/' ? rest + 1 : rest);
+                struct mg_http_message hm2 = *hm;
+                hm2.uri = mg_str(stripped);
+                mg_http_serve_dir(c, &hm2, &opts);
+            } else {
+                mg_http_serve_dir(c, hm, &opts);
+            }
+            return;
+        }
+    }
+
+    /* 4. No match. */
     mg_http_reply(c, 404, "", "Not Found");
 }
 
@@ -436,6 +549,9 @@ EsuValue *esu_http_create_server(EsuValue *port) {
     ctx->route_count = 0;
     ctx->route_capacity = 0;
     ctx->port = p;
+    ctx->static_dir = NULL;
+    ctx->static_prefix = NULL;
+    ctx->before_hook = NULL;
 
     /* Store server context as a map with a hidden pointer */
     EsuValue *server = esu_map_new();
@@ -444,13 +560,51 @@ EsuValue *esu_http_create_server(EsuValue *port) {
     return server;
 }
 
-void esu_http_add_route(EsuValue *server, EsuValue *method,
-                        EsuValue *path, EsuValue *handler) {
-    /* Get server context */
+/* Resolve the hidden ServerCtx pointer stored on a server map. */
+static ServerCtx *server_ctx(EsuValue *server) {
     EsuValue *ctx_val = esu_map_get(server, esu_string("__ctx"));
-    if (!ctx_val || ctx_val->type != VAL_NUMBER) return;
+    if (!ctx_val || ctx_val->type != VAL_NUMBER) {
+        if (ctx_val) esu_release(ctx_val);
+        return NULL;
+    }
     ServerCtx *ctx = (ServerCtx *)(uintptr_t)ctx_val->as.number;
     esu_release(ctx_val);
+    return ctx;
+}
+
+void esu_http_serve_static(EsuValue *server, EsuValue *dir, EsuValue *prefix) {
+    ServerCtx *ctx = server_ctx(server);
+    if (!ctx) return;
+    esu_free(ctx->static_dir);
+    esu_free(ctx->static_prefix);
+    ctx->static_dir = esu_strdup(dir->type == VAL_STRING ? dir->as.string : ".");
+    if (prefix && prefix->type == VAL_STRING && prefix->as.string[0] != '\0') {
+        /* Normalise: ensure leading '/', drop trailing '/' (unless it's just "/") */
+        const char *p = prefix->as.string;
+        size_t n = strlen(p);
+        char buf[256];
+        size_t j = 0;
+        if (p[0] != '/') buf[j++] = '/';
+        for (size_t i = 0; i < n && j < sizeof(buf) - 1; i++) buf[j++] = p[i];
+        while (j > 1 && buf[j - 1] == '/') j--;
+        buf[j] = '\0';
+        ctx->static_prefix = esu_strdup(buf);
+    } else {
+        ctx->static_prefix = NULL; /* serve at root */
+    }
+}
+
+void esu_http_set_before_hook(EsuValue *server, EsuValue *handler) {
+    ServerCtx *ctx = server_ctx(server);
+    if (!ctx) return;
+    if (ctx->before_hook) esu_release(ctx->before_hook);
+    ctx->before_hook = esu_retain(handler);
+}
+
+void esu_http_add_route(EsuValue *server, EsuValue *method,
+                        EsuValue *path, EsuValue *handler) {
+    ServerCtx *ctx = server_ctx(server);
+    if (!ctx) return;
 
     if (ctx->route_count >= ctx->route_capacity) {
         ctx->route_capacity = ctx->route_capacity == 0 ? 8 : ctx->route_capacity * 2;
@@ -466,13 +620,11 @@ void esu_http_add_route(EsuValue *server, EsuValue *method,
 }
 
 EsuValue *esu_http_listen(EsuValue *server) {
-    EsuValue *ctx_val = esu_map_get(server, esu_string("__ctx"));
-    if (!ctx_val || ctx_val->type != VAL_NUMBER) {
+    ServerCtx *ctx = server_ctx(server);
+    if (!ctx) {
         esu_raise_msg("invalid server object");
         return esu_nothing();
     }
-    ServerCtx *ctx = (ServerCtx *)(uintptr_t)ctx_val->as.number;
-    esu_release(ctx_val);
     active_server = ctx;
 
     struct mg_mgr mgr;
@@ -505,6 +657,27 @@ EsuValue *esu_http_respond(EsuValue *status, EsuValue *body) {
     EsuValue *response = esu_map_new();
     esu_map_set(response, esu_string("status"), esu_retain(status));
     esu_map_set(response, esu_string("body"), esu_retain(body));
+    return response;
+}
+
+/* Redirect response: { status: 302|301, headers: { Location: url } }.
+ * `permanent` truthy → 301, else 302. */
+EsuValue *esu_http_redirect(EsuValue *url, EsuValue *permanent) {
+    int perm = permanent && ((permanent->type == VAL_BOOL && permanent->as.boolean) ||
+                             (permanent->type == VAL_NUMBER && permanent->as.number != 0));
+    EsuValue *response = esu_map_new();
+    EsuValue *status = esu_number(perm ? 301 : 302);
+    EsuValue *headers = esu_map_new();
+    EsuValue *loc_key = esu_string("Location");
+    EsuValue *loc_val = (url->type == VAL_STRING) ? esu_retain(url) : esu_string("/");
+    esu_map_set(headers, loc_key, loc_val);
+    esu_map_set(response, esu_string("status"), status);
+    esu_map_set(response, esu_string("headers"), headers);
+    esu_map_set(response, esu_string("body"), esu_string(""));
+    esu_release(status);
+    esu_release(headers);
+    esu_release(loc_key);
+    esu_release(loc_val);
     return response;
 }
 
@@ -567,6 +740,21 @@ EsuValue *esu_http_req_route_param(EsuValue *request, EsuValue *name) {
     }
     EsuValue *v = esu_map_get(params, name);
     esu_release(params);
+    if (!v || v->type == VAL_NOTHING) {
+        if (v) esu_release(v);
+        return esu_string("");
+    }
+    return v;
+}
+
+EsuValue *esu_http_req_cookie(EsuValue *request, EsuValue *name) {
+    EsuValue *cookies = esu_map_get(request, esu_string("cookies"));
+    if (!cookies || cookies->type != VAL_MAP) {
+        if (cookies) esu_release(cookies);
+        return esu_string("");
+    }
+    EsuValue *v = esu_map_get(cookies, name);
+    esu_release(cookies);
     if (!v || v->type == VAL_NOTHING) {
         if (v) esu_release(v);
         return esu_string("");
