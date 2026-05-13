@@ -11,10 +11,13 @@ EsuValue *esu_http_post(EsuValue *url, EsuValue *body);
 EsuValue *esu_http_create_server(EsuValue *port);
 void esu_http_add_route(EsuValue *server, EsuValue *method,
                         EsuValue *path, EsuValue *handler);
+void esu_http_serve_static(EsuValue *server, EsuValue *dir, EsuValue *prefix);
+void esu_http_set_before_hook(EsuValue *server, EsuValue *handler);
 EsuValue *esu_http_listen(EsuValue *server);
 
 /* Response builders */
 EsuValue *esu_http_respond(EsuValue *status, EsuValue *body);
+EsuValue *esu_http_redirect(EsuValue *url, EsuValue *permanent);
 
 /* Request accessors */
 EsuValue *esu_http_req_path(EsuValue *request);
@@ -23,5 +26,6 @@ EsuValue *esu_http_req_body(EsuValue *request);
 EsuValue *esu_http_req_header(EsuValue *request, EsuValue *name);
 EsuValue *esu_http_req_query(EsuValue *request, EsuValue *name);
 EsuValue *esu_http_req_route_param(EsuValue *request, EsuValue *name);
+EsuValue *esu_http_req_cookie(EsuValue *request, EsuValue *name);
 
 #endif

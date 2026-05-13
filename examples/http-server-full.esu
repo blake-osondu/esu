@@ -1,0 +1,37 @@
+-- HTTP server: static files, cookies, redirects, and a before-request hook
+server is a new http server on port 3002
+
+-- Static assets mounted at /static (files live in examples/public/)
+serve static files from "examples/public" at "/static"
+
+-- Middleware: runs before every route. If it returns a response, the route
+-- handler is skipped. Here: block /admin unless a "role=admin" cookie is set.
+before every request do
+    requested-path is the request path
+    cookie-role is the cookie "role"
+    blocked is requested-path is equal to "/admin" and cookie-role is not equal to "admin"
+    if blocked then
+        respond with {"status": 403, "body": "Forbidden — admins only"}
+    end
+end
+
+when someone visits "/" then
+    respond with "Try /old-home, /admin, /set-cookie, or /static/hello.txt".
+
+-- Redirect (302 by default)
+when someone visits "/old-home" then
+    redirect to "/".
+
+-- Permanent redirect (301)
+when someone visits "/ancient" then
+    redirect permanently to "/".
+
+-- Set a cookie on the response
+when someone visits "/set-cookie" then
+    respond with {"body": "cookie set — now try /admin", "cookies": {"role": "admin"}}.
+
+-- Reachable only with the admin cookie (enforced by the before-hook)
+when someone visits "/admin" then
+    respond with "Welcome, admin.".
+
+start the server
