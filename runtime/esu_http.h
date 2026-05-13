@@ -3,9 +3,15 @@
 
 #include "esu_value.h"
 
-/* HTTP client: GET/POST/fetch */
+/* HTTP client: convenience wrappers */
 EsuValue *esu_http_get(EsuValue *url);
 EsuValue *esu_http_post(EsuValue *url, EsuValue *body);
+EsuValue *esu_http_put(EsuValue *url, EsuValue *body);
+EsuValue *esu_http_patch(EsuValue *url, EsuValue *body);
+EsuValue *esu_http_delete(EsuValue *url);
+
+/* General request: method + URL + options map (body, headers, json) */
+EsuValue *esu_http_request(EsuValue *method, EsuValue *url, EsuValue *options);
 
 /* HTTP server */
 EsuValue *esu_http_create_server(EsuValue *port);

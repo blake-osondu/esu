@@ -1,0 +1,25 @@
+-- Echo server for testing HTTP clients. Returns request info as JSON.
+-- Listens on port 3003.
+server is a new http server on port 3003
+
+when someone sends a GET to "/echo" then
+    response-get is {"method": "GET", "path": request["path"]}
+    respond with {"status": 200, "body": response-get, "headers": {"Content-Type": "application/json"}}.
+
+when someone sends a POST to "/echo" then
+    response-post is {"method": "POST", "body": request["body"]}
+    respond with {"status": 200, "body": response-post, "headers": {"Content-Type": "application/json"}}.
+
+when someone sends a PUT to "/echo" then
+    response-put is {"method": "PUT", "body": request["body"]}
+    respond with {"status": 200, "body": response-put, "headers": {"Content-Type": "application/json"}}.
+
+when someone sends a PATCH to "/echo" then
+    response-patch is {"method": "PATCH", "body": request["body"]}
+    respond with {"status": 200, "body": response-patch, "headers": {"Content-Type": "application/json"}}.
+
+when someone sends a DELETE to "/echo" then
+    response-delete is {"method": "DELETE"}
+    respond with {"status": 200, "body": response-delete, "headers": {"Content-Type": "application/json"}}.
+
+start the server

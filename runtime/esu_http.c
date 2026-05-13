@@ -5,11 +5,26 @@
 #include "esu_mem.h"
 #include "esu_error.h"
 #include "mongoose.h"
+#include "cJSON.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <ctype.h>     /* tolower */
 #include <strings.h>   /* strcasecmp */
+
+/* Case-insensitive substring search (portable; avoids GNU strcasestr). */
+static const char *ci_strstr(const char *hay, const char *needle) {
+    if (!*needle) return hay;
+    for (; *hay; hay++) {
+        const char *h = hay, *n = needle;
+        while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) {
+            h++; n++;
+        }
+        if (!*n) return hay;
+    }
+    return NULL;
+}
 
 /* ===== HTTP CLIENT ===== */
 
@@ -19,7 +34,11 @@ typedef struct {
     int response_len;
     int done;
     int status;
+    EsuValue *headers;   /* parsed response headers (a map), or NULL */
 } ClientCtx;
+
+/* Up to this many response headers are captured. */
+#define CLIENT_MAX_HEADERS 30
 
 static void client_fn(struct mg_connection *c, int ev, void *ev_data) {
     ClientCtx *ctx = (ClientCtx *)c->fn_data;
@@ -32,6 +51,20 @@ static void client_fn(struct mg_connection *c, int ev, void *ev_data) {
         ctx->response_body[hm->body.len] = '\0';
         ctx->response_len = hm->body.len;
         ctx->status = mg_http_status(hm);
+        /* Capture response headers into a fresh map. */
+        ctx->headers = esu_map_new();
+        for (size_t i = 0; i < sizeof(hm->headers) / sizeof(hm->headers[0]); i++) {
+            if (hm->headers[i].name.len == 0) break;
+            char nbuf[256], vbuf[2048];
+            snprintf(nbuf, sizeof(nbuf), "%.*s",
+                     (int)hm->headers[i].name.len, hm->headers[i].name.buf);
+            snprintf(vbuf, sizeof(vbuf), "%.*s",
+                     (int)hm->headers[i].value.len, hm->headers[i].value.buf);
+            EsuValue *k = esu_string(nbuf), *v = esu_string(vbuf);
+            esu_map_set(ctx->headers, k, v);
+            esu_release(k);
+            esu_release(v);
+        }
         ctx->done = 1;
         c->is_closing = 1;
     } else if (ev == MG_EV_ERROR) {
@@ -40,17 +73,35 @@ static void client_fn(struct mg_connection *c, int ev, void *ev_data) {
     }
 }
 
+/* Perform an HTTP request.
+ *   method        - "GET", "POST", "PUT", "DELETE", "PATCH", ...
+ *   url            - full URL
+ *   body           - request body string, or NULL
+ *   extra_headers  - "Header: val\r\n..." block to send verbatim, or NULL
+ *   content_type   - sets Content-Type if non-NULL AND not already in extra_headers
+ * Returns a response map {status, body, headers, ok} (ok = status < 400), or
+ * nothing on connection failure. */
 static EsuValue *http_request(const char *url, const char *method,
-                              const char *body, const char *content_type) {
+                              const char *body, const char *extra_headers,
+                              const char *content_type) {
     struct mg_mgr mgr;
-    ClientCtx ctx = {NULL, 0, 0, 0};
+    ClientCtx ctx = {NULL, 0, 0, 0, NULL};
     mg_mgr_init(&mgr);
 
     struct mg_str host = mg_url_host(url);
-    char headers[512] = "";
-    if (content_type) {
-        snprintf(headers, sizeof(headers),
-                 "Content-Type: %s\r\n", content_type);
+
+    /* Assemble outgoing header block. */
+    char headers[2048] = "";
+    size_t hlen = 0;
+    int has_ct = extra_headers &&
+                 (ci_strstr(extra_headers, "content-type:") != NULL);
+    if (content_type && !has_ct) {
+        int n = snprintf(headers, sizeof(headers),
+                         "Content-Type: %s\r\n", content_type);
+        if (n > 0) hlen = (size_t)n;
+    }
+    if (extra_headers && extra_headers[0]) {
+        snprintf(headers + hlen, sizeof(headers) - hlen, "%s", extra_headers);
     }
 
     struct mg_connection *c = mg_http_connect(&mgr, url, client_fn, &ctx);
@@ -60,10 +111,8 @@ static EsuValue *http_request(const char *url, const char *method,
         return esu_nothing();
     }
 
-    /* Build and send request */
     int is_ssl = (strncmp(url, "https", 5) == 0);
     if (is_ssl) {
-        /* mongoose needs TLS config for HTTPS */
         struct mg_tls_opts opts = {0};
         mg_tls_init(c, &opts);
     }
@@ -91,23 +140,77 @@ static EsuValue *http_request(const char *url, const char *method,
             headers);
     }
 
-    /* Poll until done */
     while (!ctx.done) mg_mgr_poll(&mgr, 1000);
-
     mg_mgr_free(&mgr);
 
-    if (ctx.response_body) {
-        EsuValue *result = esu_map_new();
-        EsuValue *body_val = esu_string(ctx.response_body);
-        EsuValue *status_val = esu_number(ctx.status);
-        esu_map_set(result, esu_string("body"), body_val);
-        esu_map_set(result, esu_string("status"), status_val);
-        esu_release(body_val);
-        esu_release(status_val);
-        esu_free(ctx.response_body);
-        return result;
+    if (!ctx.response_body) {
+        if (ctx.headers) esu_release(ctx.headers);
+        return esu_nothing();
     }
-    return esu_nothing();
+
+    EsuValue *result = esu_map_new();
+    EsuValue *body_val = esu_string(ctx.response_body);
+    EsuValue *status_val = esu_number(ctx.status);
+    EsuValue *ok_val = esu_bool(ctx.status > 0 && ctx.status < 400);
+    esu_map_set(result, esu_string("body"), body_val);
+    esu_map_set(result, esu_string("status"), status_val);
+    esu_map_set(result, esu_string("ok"), ok_val);
+    esu_release(body_val);
+    esu_release(status_val);
+    esu_release(ok_val);
+
+    if (ctx.headers) {
+        esu_map_set(result, esu_string("headers"), ctx.headers);
+        /* If the server says JSON, try to expose a parsed `json` field — but
+         * swallow parse failures silently. We pre-validate with cJSON so the
+         * later esu_json_parse call never raises. */
+        for (int i = 0; i < ctx.headers->as.map->count; i++) {
+            if (strcasecmp(ctx.headers->as.map->entries[i].key, "Content-Type") == 0) {
+                char *ctv = esu_to_cstring(ctx.headers->as.map->entries[i].value);
+                if (ci_strstr(ctv, "application/json")) {
+                    cJSON *probe = cJSON_Parse(ctx.response_body);
+                    if (probe) {
+                        cJSON_Delete(probe);
+                        EsuValue *bstr = esu_string(ctx.response_body);
+                        EsuValue *parsed = esu_json_parse(bstr);
+                        esu_map_set(result, esu_string("json"), parsed);
+                        esu_release(bstr);
+                        esu_release(parsed);
+                    }
+                    /* else: response said JSON but body isn't valid; skip silently. */
+                }
+                esu_free(ctv);
+                break;
+            }
+        }
+        esu_release(ctx.headers);
+    } else {
+        EsuValue *empty = esu_map_new();
+        esu_map_set(result, esu_string("headers"), empty);
+        esu_release(empty);
+    }
+
+    esu_free(ctx.response_body);
+    return result;
+}
+
+/* Build a "Header: value\r\n..." block from an EsuValue map. Caller frees.
+ * Returns NULL if `m` isn't a map or is empty. */
+static char *headers_block_from_map(EsuValue *m) {
+    if (!m || m->type != VAL_MAP || m->as.map->count == 0) return NULL;
+    size_t cap = 256, len = 0;
+    char *buf = esu_alloc(cap);
+    buf[0] = '\0';
+    EsuMap *map = m->as.map;
+    for (int i = 0; i < map->count; i++) {
+        char *vstr = esu_to_cstring(map->entries[i].value);
+        size_t need = strlen(map->entries[i].key) + strlen(vstr) + 8;
+        while (len + need >= cap) { cap *= 2; buf = esu_realloc(buf, cap); }
+        len += (size_t)snprintf(buf + len, cap - len, "%s: %s\r\n",
+                                map->entries[i].key, vstr);
+        esu_free(vstr);
+    }
+    return buf;
 }
 
 EsuValue *esu_http_get(EsuValue *url) {
@@ -115,7 +218,7 @@ EsuValue *esu_http_get(EsuValue *url) {
         esu_raise_msg("URL must be a string");
         return esu_nothing();
     }
-    return http_request(url->as.string, "GET", NULL, NULL);
+    return http_request(url->as.string, "GET", NULL, NULL, NULL);
 }
 
 EsuValue *esu_http_post(EsuValue *url, EsuValue *body) {
@@ -125,8 +228,73 @@ EsuValue *esu_http_post(EsuValue *url, EsuValue *body) {
     }
     char *body_str = esu_to_cstring(body);
     EsuValue *result = http_request(url->as.string, "POST", body_str,
-                                    "application/json");
+                                    NULL, "application/json");
     esu_free(body_str);
+    return result;
+}
+
+EsuValue *esu_http_put(EsuValue *url, EsuValue *body) {
+    if (url->type != VAL_STRING) { esu_raise_msg("URL must be a string"); return esu_nothing(); }
+    char *body_str = esu_to_cstring(body);
+    EsuValue *result = http_request(url->as.string, "PUT", body_str,
+                                    NULL, "application/json");
+    esu_free(body_str);
+    return result;
+}
+
+EsuValue *esu_http_patch(EsuValue *url, EsuValue *body) {
+    if (url->type != VAL_STRING) { esu_raise_msg("URL must be a string"); return esu_nothing(); }
+    char *body_str = esu_to_cstring(body);
+    EsuValue *result = http_request(url->as.string, "PATCH", body_str,
+                                    NULL, "application/json");
+    esu_free(body_str);
+    return result;
+}
+
+EsuValue *esu_http_delete(EsuValue *url) {
+    if (url->type != VAL_STRING) { esu_raise_msg("URL must be a string"); return esu_nothing(); }
+    return http_request(url->as.string, "DELETE", NULL, NULL, NULL);
+}
+
+/* General request: __http_request(method, url, options).
+ * options (a map, optional): body, headers (map), json (bool — JSON-encode body). */
+EsuValue *esu_http_request(EsuValue *method, EsuValue *url, EsuValue *options) {
+    if (url->type != VAL_STRING) {
+        esu_raise_msg("URL must be a string");
+        return esu_nothing();
+    }
+    const char *m = (method->type == VAL_STRING) ? method->as.string : "GET";
+
+    char *body_str = NULL;
+    char *extra_headers = NULL;
+    const char *content_type = NULL;
+
+    if (options && options->type == VAL_MAP) {
+        EsuValue *body = esu_map_get(options, esu_string("body"));
+        EsuValue *hdrs = esu_map_get(options, esu_string("headers"));
+        EsuValue *as_json = esu_map_get(options, esu_string("json"));
+        int want_json = as_json && ((as_json->type == VAL_BOOL && as_json->as.boolean) ||
+                                    (as_json->type == VAL_NUMBER && as_json->as.number != 0));
+        if (body && body->type != VAL_NOTHING) {
+            if (want_json) {
+                EsuValue *encoded = esu_to_json(body);
+                body_str = esu_to_cstring(encoded);
+                esu_release(encoded);
+                content_type = "application/json";
+            } else {
+                body_str = esu_to_cstring(body);
+            }
+        }
+        extra_headers = headers_block_from_map(hdrs);
+        if (body) esu_release(body);
+        if (hdrs) esu_release(hdrs);
+        if (as_json) esu_release(as_json);
+    }
+
+    EsuValue *result = http_request(url->as.string, m, body_str,
+                                    extra_headers, content_type);
+    esu_free(body_str);
+    esu_free(extra_headers);
     return result;
 }
 

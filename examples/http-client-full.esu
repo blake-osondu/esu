@@ -1,0 +1,31 @@
+-- HTTP client demo. Start examples/http-server-extended.esu first (port 3001),
+-- then run this with `esu run`.
+
+-- Simple GET (uses __http_get wrapper)
+display "GET /users/42"
+response is get "http://127.0.0.1:3001/users/42"
+display "  status: " + response["status"]
+display "  body: " + response["body"]
+
+-- GET with custom headers — goes through __http_request with an options map
+display "GET /whoami with Authorization header"
+response is get "http://127.0.0.1:3001/whoami" with headers {"Authorization": "Bearer xyz123"}
+display "  body: " + response["body"]
+
+-- A GET that returns application/json — response["json"] is auto-parsed
+display "GET /users/7/posts?page=3 (server returns JSON)"
+response is get "http://127.0.0.1:3001/users/7/posts?page=3"
+display "  ok: " + response["ok"]
+display "  Content-Type: " + response["headers"]["Content-Type"]
+display "  parsed json.user: " + response["json"]["user"]
+
+-- Custom HTTP status (418 teapot) — response["ok"] should be false
+display "GET /api/teapot (server returns 418)"
+response is get "http://127.0.0.1:3001/api/teapot"
+display "  status: " + response["status"]
+display "  ok: " + response["ok"]
+
+-- fetch sugar still works (alias for GET)
+display "fetch the contents of /users/99"
+response is fetch the contents of "http://127.0.0.1:3001/users/99"
+display "  body: " + response["body"]
