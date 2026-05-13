@@ -1,0 +1,35 @@
+-- HTTP server demonstrating headers, query params, and route params
+server is a new http server on port 3001
+
+-- Route param: /users/:id
+when someone visits "/users/:id" then
+    id is the route parameter "id"
+    respond with "User: " + id.
+
+-- Query param: /search?q=esu
+when someone visits "/search" then
+    q is the query parameter "q"
+    respond with "Searching for: " + q.
+
+-- Multi-phrasing: "the X NAME maps to VAR"
+when someone visits "/lookup" then
+    the query parameter "name" maps to name
+    respond with "Hello, " + name.
+
+-- Header access
+when someone visits "/whoami" then
+    auth is the request header "Authorization"
+    respond with "Auth: " + auth.
+
+-- Map-based response with custom status and headers
+when someone visits "/api/teapot" then
+    respond with {"status": 418, "body": "I'm a teapot", "headers": {"X-Custom": "yes"}}.
+
+-- Combination: route param + query param + custom JSON response
+when someone visits "/users/:id/posts" then
+    user-id is the route parameter "id"
+    page is the query parameter "page"
+    response-body is {"user": user-id, "page": page}
+    respond with {"status": 200, "body": response-body, "headers": {"Content-Type": "application/json"}}.
+
+start the server

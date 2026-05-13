@@ -626,6 +626,63 @@ static ASTNode *parse_primary(Parser *p) {
         }
     }
 
+    /* --- Request accessor: header / query / route param ---
+     *   "request header NAME"          → __http_req_header(request, NAME)
+     *   "header NAME"                  → __http_req_header(request, NAME)
+     *   "request query NAME"           → __http_req_query(request, NAME)
+     *   "query parameter NAME"         → __http_req_query(request, NAME)
+     *   "query value NAME"             → __http_req_query(request, NAME)
+     *   "route parameter NAME"         → __http_req_route_param(request, NAME)
+     *   "path parameter NAME"          → __http_req_route_param(request, NAME)
+     *   "url parameter NAME"           → __http_req_route_param(request, NAME)
+     * NAME may be a string literal or a variable. */
+    {
+        int saved = p->pos;
+        const char *builtin = NULL;
+        int consumed = 0;
+
+        if (check_word(p, "request") && p->pos + 1 < p->count) {
+            const char *w1 = p->tokens[p->pos + 1].value;
+            if (strcmp(w1, "header") == 0) { builtin = "__http_req_header"; consumed = 2; }
+            else if (strcmp(w1, "query") == 0) { builtin = "__http_req_query"; consumed = 2; }
+        }
+        if (!builtin && check_word(p, "header")) {
+            builtin = "__http_req_header"; consumed = 1;
+        }
+        if (!builtin && check_word(p, "query") && p->pos + 1 < p->count) {
+            const char *w1 = p->tokens[p->pos + 1].value;
+            if (strcmp(w1, "parameter") == 0 || strcmp(w1, "param") == 0 ||
+                strcmp(w1, "value") == 0) {
+                builtin = "__http_req_query"; consumed = 2;
+            }
+        }
+        if (!builtin && (check_word(p, "route") || check_word(p, "path") || check_word(p, "url")) &&
+            p->pos + 1 < p->count) {
+            const char *w1 = p->tokens[p->pos + 1].value;
+            if (strcmp(w1, "parameter") == 0 || strcmp(w1, "param") == 0) {
+                builtin = "__http_req_route_param"; consumed = 2;
+            }
+        }
+
+        if (builtin) {
+            Token *t = current(p);
+            for (int i = 0; i < consumed; i++) advance_parser(p);
+            /* Next token must be a string or identifier — the name */
+            if (check_type(p, TOK_STRING) || check_type(p, TOK_WORD)) {
+                Token *name_tok = advance_parser(p);
+                ASTNode *name_node = (name_tok->type == TOK_STRING)
+                    ? ast_string_lit(name_tok->value, name_tok->line, name_tok->col)
+                    : ast_identifier(name_tok->value, name_tok->line, name_tok->col);
+                ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+                args[0] = ast_identifier("request", t->line, t->col);
+                args[1] = name_node;
+                return make_builtin_call(builtin, args, 2, t->line, t->col);
+            }
+            /* Couldn't parse a name — backtrack so other rules can try */
+            p->pos = saved;
+        }
+    }
+
     /* --- HTTP client builtins (prefix) --- */
     /* "fetch URL" / "fetch the contents of URL" */
     if (check_word(p, "fetch") && p->pos + 1 < p->count) {
@@ -2325,6 +2382,86 @@ static ASTNode *parse_statement(Parser *p) {
             return make_builtin_call("__http_listen", args, 1, t->line, t->col);
         }
         p->pos = saved;
+    }
+
+    /* --- Statement-level multi-phrasing for request accessors ---
+     * All of these desugar to: VAR is __http_req_X(request, NAME)
+     *   "the query parameter NAME maps to VAR"
+     *   "the query parameter NAME matches VAR"
+     *   "the query parameter NAME is associated with VAR"
+     *   "use VAR for the query parameter NAME"
+     *   (also: header / route parameter / path parameter / url parameter / query value)
+     */
+    {
+        int saved = p->pos;
+
+        /* Form 1: "use VAR for the ACCESSOR NAME" */
+        if (check_word(p, "use") && p->pos + 1 < p->count &&
+            p->tokens[p->pos + 1].type == TOK_WORD) {
+            advance_parser(p); /* use */
+            Token *var_tok = advance_parser(p);
+            if (check_word(p, "for")) {
+                advance_parser(p);
+                if (check_word(p, "the")) advance_parser(p);
+                /* Try to parse an accessor expression */
+                int acc_start = p->pos;
+                ASTNode *accessor = parse_postfix(p);
+                /* Heuristic: an accessor is a builtin call to __http_req_* */
+                if (accessor && accessor->type == NODE_FUNCTION_CALL &&
+                    accessor->as.func_call.name &&
+                    strncmp(accessor->as.func_call.name, "__http_req_", 11) == 0) {
+                    return ast_assignment(var_tok->value, accessor,
+                                          var_tok->line, var_tok->col);
+                }
+                if (accessor) ast_free(accessor);
+                (void)acc_start;
+            }
+            p->pos = saved;
+        }
+
+        /* Form 2: "(the) ACCESSOR NAME (maps to | matches | is associated with) VAR" */
+        if (check_word(p, "the")) {
+            int after_the = p->pos + 1;
+            /* Peek to see if next is an accessor keyword */
+            if (after_the < p->count && p->tokens[after_the].type == TOK_WORD) {
+                const char *w = p->tokens[after_the].value;
+                int is_accessor =
+                    strcmp(w, "query") == 0 || strcmp(w, "header") == 0 ||
+                    strcmp(w, "route") == 0 || strcmp(w, "path") == 0 ||
+                    strcmp(w, "url") == 0 || strcmp(w, "request") == 0;
+                if (is_accessor) {
+                    advance_parser(p); /* the */
+                    int acc_start = p->pos;
+                    ASTNode *accessor = parse_postfix(p);
+                    if (accessor && accessor->type == NODE_FUNCTION_CALL &&
+                        accessor->as.func_call.name &&
+                        strncmp(accessor->as.func_call.name, "__http_req_", 11) == 0) {
+                        /* Look for connector */
+                        int matched = 0;
+                        if (check_two_words(p, "maps", "to")) {
+                            advance_parser(p); advance_parser(p); matched = 1;
+                        } else if (check_word(p, "matches")) {
+                            advance_parser(p); matched = 1;
+                        } else if (p->pos + 2 < p->count &&
+                                   check_word(p, "is") &&
+                                   p->tokens[p->pos + 1].type == TOK_WORD &&
+                                   strcmp(p->tokens[p->pos + 1].value, "associated") == 0 &&
+                                   strcmp(p->tokens[p->pos + 2].value, "with") == 0) {
+                            advance_parser(p); advance_parser(p); advance_parser(p);
+                            matched = 1;
+                        }
+                        if (matched && check_type(p, TOK_WORD)) {
+                            Token *var_tok = advance_parser(p);
+                            return ast_assignment(var_tok->value, accessor,
+                                                  var_tok->line, var_tok->col);
+                        }
+                    }
+                    if (accessor) ast_free(accessor);
+                    (void)acc_start;
+                    p->pos = saved;
+                }
+            }
+        }
     }
 
     /* "respond with EXPR [as json]" → return __http_respond(200, EXPR)
