@@ -22,6 +22,18 @@ set_source_files_properties(third_party/cjson/cJSON.c
     PROPERTIES COMPILE_FLAGS "-w"
 )
 
+# Third-party: SQLite (single-file amalgamation)
+add_library(sqlite STATIC third_party/sqlite/sqlite3.c)
+target_include_directories(sqlite PUBLIC ${CMAKE_SOURCE_DIR}/third_party/sqlite)
+target_compile_definitions(sqlite PUBLIC
+    SQLITE_THREADSAFE=0           # single-threaded; matches our runtime
+    SQLITE_OMIT_LOAD_EXTENSION=1   # no dlopen — smaller binary, safer
+    SQLITE_DQS=0                   # reject double-quoted string literals (correct SQL)
+)
+set_source_files_properties(third_party/sqlite/sqlite3.c
+    PROPERTIES COMPILE_FLAGS "-w"
+)
+
 # Runtime static library
 add_library(esu_runtime STATIC
     runtime/esu_runtime.c
@@ -38,12 +50,14 @@ add_library(esu_runtime STATIC
     runtime/esu_method.c
     runtime/esu_json.c
     runtime/esu_http.c
+    runtime/esu_db.c
 )
-target_link_libraries(esu_runtime PRIVATE m mongoose cjson)
+target_link_libraries(esu_runtime PRIVATE m mongoose cjson sqlite)
 target_include_directories(esu_runtime PUBLIC
     ${CMAKE_SOURCE_DIR}/runtime
     ${CMAKE_SOURCE_DIR}/third_party/mongoose
     ${CMAKE_SOURCE_DIR}/third_party/cjson
+    ${CMAKE_SOURCE_DIR}/third_party/sqlite
 )
 
 # Esu compiler executable

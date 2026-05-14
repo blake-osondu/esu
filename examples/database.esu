@@ -1,0 +1,38 @@
+-- SQLite end-to-end demo. Creates an in-memory DB, inserts rows in a
+-- transaction, queries them back, and updates one.
+db is open database ":memory:"
+
+-- Schema (one-shot statement, no params)
+run "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)" on db
+
+-- Insert several rows in a transaction
+begin transaction on db
+run "INSERT INTO users (name, age) VALUES (?, ?)" on db with ["Alice", 30]
+run "INSERT INTO users (name, age) VALUES (?, ?)" on db with ["Bob", 28]
+run "INSERT INTO users (name, age) VALUES (?, ?)" on db with ["Carol", 41]
+commit transaction on db
+
+-- Query all rows
+display "All users:"
+all-users is query "SELECT id, name, age FROM users ORDER BY id" on db
+for each row in all-users do
+    display "  " + row["id"] + ". " + row["name"] + " (" + row["age"] + ")"
+end
+
+-- Query with parameters
+display "Users older than 29:"
+older is query "SELECT name, age FROM users WHERE age > ?" on db with [29]
+for each row in older do
+    display "  " + row["name"] + " is " + row["age"]
+end
+
+-- Update one row, observe the result
+display "Bob's 29th birthday:"
+update-result is run "UPDATE users SET age = ? WHERE name = ?" on db with [29, "Bob"]
+display "  rows changed: " + update-result["changes"]
+
+bob-now is query "SELECT age FROM users WHERE name = ?" on db with ["Bob"]
+display "  Bob is now " + bob-now[0]["age"]
+
+close database db
+display "Done."
