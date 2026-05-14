@@ -116,8 +116,9 @@ static int compile_esu_src(const char *source, const char *output_path,
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
         "cc -o %s %s -I%s/runtime -I%s/third_party/mongoose -I%s/third_party/cjson "
-        "-L%s/build -lesu_runtime -lmongoose -lcjson -lm 2>&1",
-        output_path, c_path, esu_dir, esu_dir, esu_dir, esu_dir);
+        "-I%s/third_party/sqlite "
+        "-L%s/build -lesu_runtime -lmongoose -lcjson -lsqlite -lm 2>&1",
+        output_path, c_path, esu_dir, esu_dir, esu_dir, esu_dir, esu_dir);
 
     int result = system(cmd);
     if (result == 0) remove(c_path);

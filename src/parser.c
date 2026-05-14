@@ -846,6 +846,85 @@ static ASTNode *parse_primary(Parser *p) {
     }
     not_http_client:
 
+    /* --- SQLite database (expression position) ---
+     *   open database STR                        → __db_open(STR)
+     *   connect to (the) database STR            → __db_open(STR)
+     *   query SQL on DB [with PARAMS]            → __db_query(_with)(DB, SQL[, PARAMS])
+     *   run SQL on DB [with PARAMS]              → __db_run(DB, SQL, PARAMS) or __db_exec
+     */
+    if (check_word(p, "open") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* open */
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "database") || check_word(p, "db")) {
+            advance_parser(p);
+            ASTNode *path = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = path;
+            return make_builtin_call("__db_open", args, 1, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+    if (check_word(p, "connect") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* connect */
+        if (check_word(p, "to")) advance_parser(p);
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "database") || check_word(p, "db")) {
+            advance_parser(p);
+            ASTNode *path = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = path;
+            return make_builtin_call("__db_open", args, 1, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+    /* "query SQL on DB [with PARAMS]"  /  "run SQL on DB [with PARAMS]" */
+    if ((check_word(p, "query") || check_word(p, "run")) && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = current(p);
+        int is_query = check_word(p, "query");
+        advance_parser(p); /* query/run */
+        ASTNode *sql = parse_primary(p);
+        if (!check_word(p, "on")) {
+            ast_free(sql);
+            p->pos = saved;
+            goto not_db_qr;
+        }
+        advance_parser(p); /* on */
+        ASTNode *db = parse_primary(p);
+        ASTNode *params = NULL;
+        if (check_word(p, "with")) {
+            advance_parser(p);
+            params = parse_primary(p);
+        }
+        const char *builtin;
+        int argc;
+        ASTNode **args;
+        if (is_query) {
+            builtin = params ? "__db_query_with" : "__db_query";
+            argc = params ? 3 : 2;
+            args = malloc(sizeof(ASTNode *) * argc);
+            args[0] = db; args[1] = sql;
+            if (params) args[2] = params;
+        } else {
+            /* run */
+            if (params) {
+                builtin = "__db_run";
+                argc = 3;
+                args = malloc(sizeof(ASTNode *) * argc);
+                args[0] = db; args[1] = sql; args[2] = params;
+            } else {
+                builtin = "__db_exec";
+                argc = 2;
+                args = malloc(sizeof(ASTNode *) * argc);
+                args[0] = db; args[1] = sql;
+            }
+        }
+        return make_builtin_call(builtin, args, argc, t->line, t->col);
+    }
+    not_db_qr:
+
     /* "a new http server on port N" */
     if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 3 < p->count) {
         int saved = p->pos;
@@ -2603,6 +2682,50 @@ static ASTNode *parse_statement(Parser *p) {
             args[1] = ast_bool_lit(permanent, t->line, t->col);
             ASTNode *call = make_builtin_call("__http_redirect", args, 2, t->line, t->col);
             return ast_return(call, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+
+    /* --- SQLite statement-level commands ---
+     *   close (the) database DB
+     *   begin (a) transaction on DB
+     *   commit (the) transaction on DB
+     *   rollback (the) transaction on DB
+     *   run SQL on DB [with PARAMS]   — also valid here for fire-and-forget DDL/DML
+     */
+    if (check_word(p, "close") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* close */
+        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "database") || check_word(p, "db") ||
+            check_word(p, "connection")) {
+            advance_parser(p);
+            ASTNode *db = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = db;
+            return make_builtin_call("__db_close", args, 1, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+    if ((check_word(p, "begin") || check_word(p, "start") ||
+         check_word(p, "commit") || check_word(p, "rollback") ||
+         check_word(p, "abort")) && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        const char *w = current(p)->value;
+        const char *builtin = NULL;
+        if (strcmp(w, "begin") == 0 || strcmp(w, "start") == 0) builtin = "__db_begin";
+        else if (strcmp(w, "commit") == 0) builtin = "__db_commit";
+        else builtin = "__db_rollback"; /* rollback / abort */
+        Token *t = advance_parser(p);
+        if (check_word(p, "a") || check_word(p, "an") || check_word(p, "the"))
+            advance_parser(p);
+        if (check_word(p, "transaction") || check_word(p, "tx")) {
+            advance_parser(p);
+            if (check_word(p, "on")) advance_parser(p);
+            ASTNode *db = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = db;
+            return make_builtin_call(builtin, args, 1, t->line, t->col);
         }
         p->pos = saved;
     }
