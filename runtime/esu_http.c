@@ -298,6 +298,153 @@ EsuValue *esu_http_request(EsuValue *method, EsuValue *url, EsuValue *options) {
     return result;
 }
 
+/* ===== WEBSOCKET CLIENT ===== */
+
+/* A blocking WS client: opens, then provides send/receive/close on top of a
+ * private mongoose event manager that's polled inline. Single-threaded — the
+ * caller's Esu program is paused while we wait for frames.
+ *
+ * The handle is a map { __mgr, __conn, open, queue } stored as a hidden
+ * pointer so we don't expose mongoose internals to Esu code. */
+typedef struct {
+    struct mg_mgr mgr;
+    struct mg_connection *conn;
+    int open;              /* 1 while the underlying connection is alive */
+
+    /* Inbound text-frame queue. Frames are heap strings; freed on dequeue. */
+    char **queue;
+    int    queue_count;
+    int    queue_capacity;
+} WsClient;
+
+static void ws_client_enqueue(WsClient *wc, const char *buf, size_t len) {
+    if (wc->queue_count >= wc->queue_capacity) {
+        wc->queue_capacity = wc->queue_capacity == 0 ? 4 : wc->queue_capacity * 2;
+        wc->queue = esu_realloc(wc->queue, sizeof(char *) * wc->queue_capacity);
+    }
+    char *s = esu_alloc(len + 1);
+    memcpy(s, buf, len);
+    s[len] = '\0';
+    wc->queue[wc->queue_count++] = s;
+}
+
+static char *ws_client_dequeue(WsClient *wc) {
+    if (wc->queue_count == 0) return NULL;
+    char *s = wc->queue[0];
+    for (int i = 0; i < wc->queue_count - 1; i++) wc->queue[i] = wc->queue[i + 1];
+    wc->queue_count--;
+    return s;
+}
+
+static void ws_client_fn(struct mg_connection *c, int ev, void *ev_data) {
+    WsClient *wc = (WsClient *)c->fn_data;
+    if (ev == MG_EV_WS_OPEN) {
+        wc->open = 1;
+    } else if (ev == MG_EV_WS_MSG) {
+        struct mg_ws_message *wm = (struct mg_ws_message *)ev_data;
+        ws_client_enqueue(wc, wm->data.buf, wm->data.len);
+    } else if (ev == MG_EV_CLOSE || ev == MG_EV_ERROR) {
+        wc->open = 0;
+    }
+}
+
+/* Open a WS connection. Blocks until handshake completes (or fails). */
+EsuValue *esu_ws_open(EsuValue *url) {
+    if (!url || url->type != VAL_STRING) {
+        esu_raise_msg("websocket URL must be a string");
+        return esu_nothing();
+    }
+    WsClient *wc = esu_alloc(sizeof(WsClient));
+    wc->conn = NULL;
+    wc->open = 0;
+    wc->queue = NULL;
+    wc->queue_count = 0;
+    wc->queue_capacity = 0;
+    mg_mgr_init(&wc->mgr);
+
+    wc->conn = mg_ws_connect(&wc->mgr, url->as.string, ws_client_fn, wc, NULL);
+    if (!wc->conn) {
+        mg_mgr_free(&wc->mgr);
+        esu_free(wc);
+        esu_raise_msg("cannot connect to websocket URL");
+        return esu_nothing();
+    }
+
+    /* Poll until the handshake completes or the connection is rejected. */
+    for (int i = 0; i < 50 && !wc->open && wc->conn; i++) {
+        mg_mgr_poll(&wc->mgr, 100);
+        /* If the connection died during handshake, mongoose will null it on us
+         * via is_closing → next poll cleans it up; we detect via wc->open=0
+         * after the loop. */
+    }
+
+    EsuValue *handle = esu_map_new();
+    esu_map_set(handle, esu_string("url"), url);
+    esu_map_set(handle, esu_string("__client"), esu_number((double)(uintptr_t)wc));
+    return handle;
+}
+
+static WsClient *ws_client_from(EsuValue *handle) {
+    if (!handle || handle->type != VAL_MAP) return NULL;
+    EsuValue *p = esu_map_get(handle, esu_string("__client"));
+    if (!p || p->type != VAL_NUMBER) {
+        if (p) esu_release(p);
+        return NULL;
+    }
+    WsClient *wc = (WsClient *)(uintptr_t)p->as.number;
+    esu_release(p);
+    return wc;
+}
+
+void esu_ws_client_send(EsuValue *handle, EsuValue *message) {
+    WsClient *wc = ws_client_from(handle);
+    if (!wc || !wc->conn) { esu_raise_msg("websocket is not open"); return; }
+    char *msg = esu_to_cstring(message);
+    mg_ws_send(wc->conn, msg, strlen(msg), WEBSOCKET_OP_TEXT);
+    esu_free(msg);
+    /* Flush the send by polling once. */
+    mg_mgr_poll(&wc->mgr, 10);
+}
+
+/* Block until a frame arrives or the connection closes. Returns the message
+ * (as a string) or nothing on close. */
+EsuValue *esu_ws_client_receive(EsuValue *handle) {
+    WsClient *wc = ws_client_from(handle);
+    if (!wc) { esu_raise_msg("invalid websocket handle"); return esu_nothing(); }
+    while (wc->queue_count == 0 && wc->open) {
+        mg_mgr_poll(&wc->mgr, 100);
+    }
+    char *s = ws_client_dequeue(wc);
+    if (!s) return esu_nothing();
+    EsuValue *v = esu_string(s);
+    esu_free(s);
+    return v;
+}
+
+/* __ws_receive → esu_ws_receive — convenience alias so the builtin namespace
+ * is uniform (everything else WS-related is __ws_*). */
+EsuValue *esu_ws_receive(EsuValue *handle) {
+    return esu_ws_client_receive(handle);
+}
+
+void esu_ws_client_close(EsuValue *handle) {
+    WsClient *wc = ws_client_from(handle);
+    if (!wc) return;
+    if (wc->conn) {
+        wc->conn->is_closing = 1;
+        mg_mgr_poll(&wc->mgr, 50);
+    }
+    /* Drain queue */
+    for (int i = 0; i < wc->queue_count; i++) esu_free(wc->queue[i]);
+    esu_free(wc->queue);
+    mg_mgr_free(&wc->mgr);
+    esu_free(wc);
+    /* Zero the hidden pointer so a second close is a no-op. */
+    EsuValue *zero = esu_number(0);
+    esu_map_set(handle, esu_string("__client"), zero);
+    esu_release(zero);
+}
+
 /* ===== HTTP SERVER ===== */
 
 typedef struct {
@@ -305,6 +452,27 @@ typedef struct {
     char *path;     /* "/hello", "/api/users", etc. */
     EsuValue *handler; /* Closure to call */
 } Route;
+
+/* A WebSocket route.
+ *
+ * `connect_handler` runs once per new connection — typical use is to register
+ * per-connection on-message/on-close handlers via __ws_on_message etc.
+ * `message_handler`, if set, is used directly as the per-message handler for
+ * every connection on this route (a simpler form than connect_handler for
+ * stateless handlers). At least one of the two must be non-NULL.
+ */
+typedef struct {
+    char *path;
+    EsuValue *connect_handler;
+    EsuValue *message_handler;  /* optional — assigned to each new conn */
+} WsRoute;
+
+/* Per-connection state for a WebSocket connection. */
+typedef struct {
+    struct mg_connection *c;     /* mongoose connection */
+    EsuValue *message_handler;   /* closure(connection, message), or NULL */
+    EsuValue *close_handler;     /* closure(connection), or NULL */
+} WsConn;
 
 typedef struct {
     Route *routes;
@@ -314,9 +482,22 @@ typedef struct {
     char *static_dir;       /* directory to serve static files from, or NULL */
     char *static_prefix;    /* URL prefix the static dir is mounted at, or NULL ("/") */
     EsuValue *before_hook;  /* closure run before every request, or NULL */
+
+    /* WebSocket routes (HTTP-handshake paths that upgrade to WS). */
+    WsRoute *ws_routes;
+    int ws_route_count;
+    int ws_route_capacity;
+
+    /* Live WebSocket connections — kept so broadcast() can reach them all. */
+    WsConn **ws_conns;
+    int ws_conn_count;
+    int ws_conn_capacity;
 } ServerCtx;
 
 static ServerCtx *active_server = NULL;
+/* Connection currently dispatching a WS message / close — read by send/close
+ * builtins inside handlers. */
+static WsConn *active_ws_conn = NULL;
 
 /* Hex digit → int. Returns -1 on invalid. */
 static int hex_val(int c) {
@@ -631,83 +812,230 @@ static int is_real_response(EsuValue *response) {
     return 0;
 }
 
+/* Find a WS route on `ctx` whose path matches `uri`. NULL if none. */
+static WsRoute *find_ws_route(ServerCtx *ctx, const char *uri) {
+    for (int i = 0; i < ctx->ws_route_count; i++) {
+        if (strcmp(ctx->ws_routes[i].path, uri) == 0) return &ctx->ws_routes[i];
+        /* also allow mongoose-style globs */
+        if (mg_match(mg_str(uri), mg_str(ctx->ws_routes[i].path), NULL)) {
+            return &ctx->ws_routes[i];
+        }
+    }
+    return NULL;
+}
+
+/* Register a new live WS connection on a server. Takes ownership of `wc`. */
+static void ws_conns_add(ServerCtx *ctx, WsConn *wc) {
+    if (ctx->ws_conn_count >= ctx->ws_conn_capacity) {
+        ctx->ws_conn_capacity = ctx->ws_conn_capacity == 0 ? 8 : ctx->ws_conn_capacity * 2;
+        ctx->ws_conns = esu_realloc(ctx->ws_conns, sizeof(WsConn *) * ctx->ws_conn_capacity);
+    }
+    ctx->ws_conns[ctx->ws_conn_count++] = wc;
+}
+
+/* Find a connection record by its mongoose pointer. */
+static int ws_conns_find(ServerCtx *ctx, struct mg_connection *c) {
+    for (int i = 0; i < ctx->ws_conn_count; i++) {
+        if (ctx->ws_conns[i]->c == c) return i;
+    }
+    return -1;
+}
+
+/* Drop and free a WS connection record by index. */
+static void ws_conns_remove_at(ServerCtx *ctx, int idx) {
+    if (idx < 0 || idx >= ctx->ws_conn_count) return;
+    WsConn *wc = ctx->ws_conns[idx];
+    if (wc->message_handler) esu_release(wc->message_handler);
+    if (wc->close_handler) esu_release(wc->close_handler);
+    esu_free(wc);
+    /* compact */
+    for (int j = idx; j < ctx->ws_conn_count - 1; j++) {
+        ctx->ws_conns[j] = ctx->ws_conns[j + 1];
+    }
+    ctx->ws_conn_count--;
+}
+
+/* Build a "connection" Esu value (a map with a hidden mg_connection*). */
+static EsuValue *make_connection_value(struct mg_connection *c) {
+    EsuValue *m = esu_map_new();
+    esu_map_set(m, esu_string("__conn"), esu_number((double)(uintptr_t)c));
+    return m;
+}
+
+/* Resolve the hidden mg_connection* from a connection value. */
+static struct mg_connection *conn_from_value(EsuValue *v) {
+    if (!v || v->type != VAL_MAP) return NULL;
+    EsuValue *p = esu_map_get(v, esu_string("__conn"));
+    if (!p || p->type != VAL_NUMBER) {
+        if (p) esu_release(p);
+        return NULL;
+    }
+    struct mg_connection *c = (struct mg_connection *)(uintptr_t)p->as.number;
+    esu_release(p);
+    return c;
+}
+
 static void server_fn(struct mg_connection *c, int ev, void *ev_data) {
-    if (ev != MG_EV_HTTP_MSG) return;
-    struct mg_http_message *hm = (struct mg_http_message *)ev_data;
     ServerCtx *ctx = (ServerCtx *)c->fn_data;
 
-    /* URI as null-terminated for our matcher */
-    char uri_buf[2048];
-    snprintf(uri_buf, sizeof(uri_buf), "%.*s", (int)hm->uri.len, hm->uri.buf);
+    /* === HTTP request === */
+    if (ev == MG_EV_HTTP_MSG) {
+        struct mg_http_message *hm = (struct mg_http_message *)ev_data;
 
-    /* 1. Before-hook (middleware). If it returns a real response, send it and stop. */
-    if (ctx->before_hook) {
-        EsuValue *request = build_request(hm);
-        EsuValue *args[1] = { request };
-        EsuValue *response = esu_call(ctx->before_hook, args, 1);
-        if (is_real_response(response)) {
+        char uri_buf[2048];
+        snprintf(uri_buf, sizeof(uri_buf), "%.*s", (int)hm->uri.len, hm->uri.buf);
+
+        /* WS upgrade: if this URI matches a WS route, complete the handshake
+         * here, allocate per-connection state, and either run the connect
+         * handler (for the connect/on-message form) or pre-install the
+         * route's message handler directly. */
+        WsRoute *wr = find_ws_route(ctx, uri_buf);
+        if (wr && mg_http_get_header(hm, "Upgrade")) {
+            mg_ws_upgrade(c, hm, NULL);
+
+            WsConn *wc = esu_alloc(sizeof(WsConn));
+            wc->c = c;
+            wc->message_handler = wr->message_handler ? esu_retain(wr->message_handler) : NULL;
+            wc->close_handler = NULL;
+            ws_conns_add(ctx, wc);
+
+            if (wr->connect_handler) {
+                EsuValue *conn_val = make_connection_value(c);
+                EsuValue *args[1] = { conn_val };
+                ServerCtx *saved_server = active_server;
+                WsConn *saved_conn = active_ws_conn;
+                active_server = ctx;
+                active_ws_conn = wc;
+                EsuValue *result = esu_call(wr->connect_handler, args, 1);
+                active_server = saved_server;
+                active_ws_conn = saved_conn;
+                if (result) esu_release(result);
+                esu_release(conn_val);
+            }
+            return;
+        }
+
+        /* 1. Before-hook (middleware). */
+        if (ctx->before_hook) {
+            EsuValue *request = build_request(hm);
+            EsuValue *args[1] = { request };
+            EsuValue *response = esu_call(ctx->before_hook, args, 1);
+            if (is_real_response(response)) {
+                send_esu_response(c, response);
+                if (response) esu_release(response);
+                esu_release(request);
+                return;
+            }
+            if (response) esu_release(response);
+            esu_release(request);
+        }
+
+        /* 2. Match a registered route. */
+        for (int i = 0; i < ctx->route_count; i++) {
+            Route *r = &ctx->routes[i];
+            int method_match = (strcmp(r->method, "*") == 0) ||
+                (mg_strcmp(hm->method, mg_str(r->method)) == 0);
+            if (!method_match) continue;
+
+            EsuValue *route_params = match_route(r->path, uri_buf);
+            int matched = (route_params != NULL);
+            if (!matched && mg_match(hm->uri, mg_str(r->path), NULL)) {
+                matched = 1;
+                route_params = esu_map_new();
+            }
+            if (!matched) continue;
+
+            EsuValue *request = build_request(hm);
+            esu_map_set(request, esu_string("params"), route_params);
+            esu_release(route_params);
+
+            EsuValue *args[1] = { request };
+            EsuValue *response = esu_call(r->handler, args, 1);
             send_esu_response(c, response);
             if (response) esu_release(response);
             esu_release(request);
             return;
         }
-        if (response) esu_release(response);
-        esu_release(request);
-    }
 
-    /* 2. Match a registered route. */
-    for (int i = 0; i < ctx->route_count; i++) {
-        Route *r = &ctx->routes[i];
-        int method_match = (strcmp(r->method, "*") == 0) ||
-            (mg_strcmp(hm->method, mg_str(r->method)) == 0);
-        if (!method_match) continue;
-
-        /* Placeholder-aware matcher first; fall back to mg_match for *,# */
-        EsuValue *route_params = match_route(r->path, uri_buf);
-        int matched = (route_params != NULL);
-        if (!matched && mg_match(hm->uri, mg_str(r->path), NULL)) {
-            matched = 1;
-            route_params = esu_map_new();
+        /* 3. Static file fallback. */
+        if (ctx->static_dir) {
+            const char *prefix = ctx->static_prefix ? ctx->static_prefix : "/";
+            size_t plen = strlen(prefix);
+            if (strncmp(uri_buf, prefix, plen) == 0) {
+                struct mg_http_serve_opts opts = {0};
+                opts.root_dir = ctx->static_dir;
+                if (plen > 1) {
+                    char stripped[2048];
+                    const char *rest = uri_buf + plen;
+                    snprintf(stripped, sizeof(stripped), "/%s",
+                             rest[0] == '/' ? rest + 1 : rest);
+                    struct mg_http_message hm2 = *hm;
+                    hm2.uri = mg_str(stripped);
+                    mg_http_serve_dir(c, &hm2, &opts);
+                } else {
+                    mg_http_serve_dir(c, hm, &opts);
+                }
+                return;
+            }
         }
-        if (!matched) continue;
 
-        EsuValue *request = build_request(hm);
-        esu_map_set(request, esu_string("params"), route_params);
-        esu_release(route_params);
-
-        EsuValue *args[1] = { request };
-        EsuValue *response = esu_call(r->handler, args, 1);
-        send_esu_response(c, response);
-        if (response) esu_release(response);
-        esu_release(request);
+        /* 4. No match. */
+        mg_http_reply(c, 404, "", "Not Found");
         return;
     }
 
-    /* 3. Static file fallback. */
-    if (ctx->static_dir) {
-        const char *prefix = ctx->static_prefix ? ctx->static_prefix : "/";
-        size_t plen = strlen(prefix);
-        if (strncmp(uri_buf, prefix, plen) == 0) {
-            struct mg_http_serve_opts opts = {0};
-            opts.root_dir = ctx->static_dir;
-            if (plen > 1) {
-                /* Mounted at a sub-path: strip the prefix so files resolve. */
-                char stripped[2048];
-                const char *rest = uri_buf + plen;
-                snprintf(stripped, sizeof(stripped), "/%s",
-                         rest[0] == '/' ? rest + 1 : rest);
-                struct mg_http_message hm2 = *hm;
-                hm2.uri = mg_str(stripped);
-                mg_http_serve_dir(c, &hm2, &opts);
-            } else {
-                mg_http_serve_dir(c, hm, &opts);
-            }
-            return;
-        }
+    /* === WebSocket message === */
+    if (ev == MG_EV_WS_MSG) {
+        struct mg_ws_message *wm = (struct mg_ws_message *)ev_data;
+        int idx = ws_conns_find(ctx, c);
+        if (idx < 0) return;
+        WsConn *wc = ctx->ws_conns[idx];
+        if (!wc->message_handler) return;
+
+        /* Copy frame into a NUL-terminated string. */
+        char *buf = esu_alloc(wm->data.len + 1);
+        memcpy(buf, wm->data.buf, wm->data.len);
+        buf[wm->data.len] = '\0';
+
+        EsuValue *conn_val = make_connection_value(c);
+        EsuValue *msg_val = esu_string(buf);
+        EsuValue *args[2] = { conn_val, msg_val };
+        ServerCtx *saved_server = active_server;
+        WsConn *saved_conn = active_ws_conn;
+        active_server = ctx;
+        active_ws_conn = wc;
+        EsuValue *result = esu_call(wc->message_handler, args, 2);
+        active_server = saved_server;
+        active_ws_conn = saved_conn;
+        if (result) esu_release(result);
+        esu_release(conn_val);
+        esu_release(msg_val);
+        esu_free(buf);
+        return;
     }
 
-    /* 4. No match. */
-    mg_http_reply(c, 404, "", "Not Found");
+    /* === Connection close (HTTP or WS) === */
+    if (ev == MG_EV_CLOSE) {
+        int idx = ws_conns_find(ctx, c);
+        if (idx >= 0) {
+            WsConn *wc = ctx->ws_conns[idx];
+            if (wc->close_handler) {
+                EsuValue *conn_val = make_connection_value(c);
+                EsuValue *args[1] = { conn_val };
+                ServerCtx *saved_server = active_server;
+                WsConn *saved_conn = active_ws_conn;
+                active_server = ctx;
+                active_ws_conn = wc;
+                EsuValue *result = esu_call(wc->close_handler, args, 1);
+                active_server = saved_server;
+                active_ws_conn = saved_conn;
+                if (result) esu_release(result);
+                esu_release(conn_val);
+            }
+            ws_conns_remove_at(ctx, idx);
+        }
+        return;
+    }
 }
 
 EsuValue *esu_http_create_server(EsuValue *port) {
@@ -720,6 +1048,12 @@ EsuValue *esu_http_create_server(EsuValue *port) {
     ctx->static_dir = NULL;
     ctx->static_prefix = NULL;
     ctx->before_hook = NULL;
+    ctx->ws_routes = NULL;
+    ctx->ws_route_count = 0;
+    ctx->ws_route_capacity = 0;
+    ctx->ws_conns = NULL;
+    ctx->ws_conn_count = 0;
+    ctx->ws_conn_capacity = 0;
 
     /* Store server context as a map with a hidden pointer */
     EsuValue *server = esu_map_new();
@@ -785,6 +1119,120 @@ void esu_http_add_route(EsuValue *server, EsuValue *method,
         path->type == VAL_STRING ? path->as.string : "/");
     ctx->routes[ctx->route_count].handler = esu_retain(handler);
     ctx->route_count++;
+}
+
+/* Internal: append a route record with one of the two handler kinds set. */
+static void add_ws_route_internal(ServerCtx *ctx, const char *path,
+                                  EsuValue *connect_handler,
+                                  EsuValue *message_handler) {
+    if (ctx->ws_route_count >= ctx->ws_route_capacity) {
+        ctx->ws_route_capacity = ctx->ws_route_capacity == 0 ? 4 : ctx->ws_route_capacity * 2;
+        ctx->ws_routes = esu_realloc(ctx->ws_routes, sizeof(WsRoute) * ctx->ws_route_capacity);
+    }
+    ctx->ws_routes[ctx->ws_route_count].path = esu_strdup(path);
+    ctx->ws_routes[ctx->ws_route_count].connect_handler =
+        connect_handler ? esu_retain(connect_handler) : NULL;
+    ctx->ws_routes[ctx->ws_route_count].message_handler =
+        message_handler ? esu_retain(message_handler) : NULL;
+    ctx->ws_route_count++;
+}
+
+/* Register a WS route with a connect-handler. The handler is called once per
+ * new connection and typically uses __ws_on_message / __ws_on_close to set
+ * per-connection state. */
+void esu_http_add_ws_route(EsuValue *server, EsuValue *path, EsuValue *connect_handler) {
+    ServerCtx *ctx = server_ctx(server);
+    if (!ctx) return;
+    add_ws_route_internal(ctx,
+        path->type == VAL_STRING ? path->as.string : "/",
+        connect_handler, NULL);
+}
+
+/* Register a WS route with a direct message handler. Each new connection on
+ * the route gets this handler installed as its on-message; no connect-time
+ * code runs. The handler is called as (connection, message). */
+void esu_http_add_ws_handler(EsuValue *server, EsuValue *path, EsuValue *message_handler) {
+    ServerCtx *ctx = server_ctx(server);
+    if (!ctx) return;
+    add_ws_route_internal(ctx,
+        path->type == VAL_STRING ? path->as.string : "/",
+        NULL, message_handler);
+}
+
+/* Install a per-connection message handler. Called from inside a connect
+ * handler — uses active_ws_conn. */
+void esu_ws_on_message(EsuValue *handler) {
+    if (!active_ws_conn) {
+        esu_raise_msg("'on message' must be called inside a 'when someone connects' handler");
+        return;
+    }
+    if (active_ws_conn->message_handler) esu_release(active_ws_conn->message_handler);
+    active_ws_conn->message_handler = esu_retain(handler);
+}
+
+void esu_ws_on_close(EsuValue *handler) {
+    if (!active_ws_conn) {
+        esu_raise_msg("'on close' must be called inside a 'when someone connects' handler");
+        return;
+    }
+    if (active_ws_conn->close_handler) esu_release(active_ws_conn->close_handler);
+    active_ws_conn->close_handler = esu_retain(handler);
+}
+
+/* Send a text frame.
+ *
+ *   - If `connection` is a server-side connection value (has __conn), this is
+ *     a broadcast-to-one over the *server's* mongoose conn.
+ *   - If `connection` is a client-side WS handle (has __client), this delegates
+ *     to esu_ws_client_send so the client's mgr gets polled to flush.
+ *   - If `connection` is NULL, use the currently-dispatching server connection.
+ */
+void esu_ws_send(EsuValue *connection, EsuValue *message) {
+    /* Client-handle dispatch */
+    if (connection && connection->type == VAL_MAP) {
+        EsuValue *p = esu_map_get(connection, esu_string("__client"));
+        if (p && p->type == VAL_NUMBER && p->as.number != 0) {
+            esu_release(p);
+            esu_ws_client_send(connection, message);
+            return;
+        }
+        if (p) esu_release(p);
+    }
+    struct mg_connection *c = connection ? conn_from_value(connection)
+                                         : (active_ws_conn ? active_ws_conn->c : NULL);
+    if (!c) { esu_raise_msg("no connection to send to"); return; }
+    char *msg = esu_to_cstring(message);
+    mg_ws_send(c, msg, strlen(msg), WEBSOCKET_OP_TEXT);
+    esu_free(msg);
+}
+
+/* Send to every active WS connection on the current server. */
+void esu_ws_broadcast(EsuValue *message) {
+    if (!active_server) { esu_raise_msg("broadcast called outside a server context"); return; }
+    char *msg = esu_to_cstring(message);
+    size_t mlen = strlen(msg);
+    for (int i = 0; i < active_server->ws_conn_count; i++) {
+        mg_ws_send(active_server->ws_conns[i]->c, msg, mlen, WEBSOCKET_OP_TEXT);
+    }
+    esu_free(msg);
+}
+
+/* Close a WS connection. Dispatches to the client-close path if `connection`
+ * is a WS client handle (has __client). NULL → close the active server conn. */
+void esu_ws_close(EsuValue *connection) {
+    if (connection && connection->type == VAL_MAP) {
+        EsuValue *p = esu_map_get(connection, esu_string("__client"));
+        if (p && p->type == VAL_NUMBER && p->as.number != 0) {
+            esu_release(p);
+            esu_ws_client_close(connection);
+            return;
+        }
+        if (p) esu_release(p);
+    }
+    struct mg_connection *c = connection ? conn_from_value(connection)
+                                         : (active_ws_conn ? active_ws_conn->c : NULL);
+    if (!c) return;
+    c->is_closing = 1;
 }
 
 EsuValue *esu_http_listen(EsuValue *server) {

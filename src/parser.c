@@ -855,13 +855,45 @@ static ASTNode *parse_primary(Parser *p) {
     if (check_word(p, "open") && p->pos + 1 < p->count) {
         int saved = p->pos;
         Token *t = advance_parser(p); /* open */
-        if (check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "the") || check_word(p, "a") || check_word(p, "an"))
+            advance_parser(p);
         if (check_word(p, "database") || check_word(p, "db")) {
             advance_parser(p);
             ASTNode *path = parse_primary(p);
             ASTNode **args = malloc(sizeof(ASTNode *));
             args[0] = path;
             return make_builtin_call("__db_open", args, 1, t->line, t->col);
+        }
+        if (check_word(p, "websocket") || check_word(p, "ws") ||
+            check_word(p, "web") /* "web socket" */) {
+            int after = p->pos + 1;
+            if (check_word(p, "web") && after < p->count &&
+                p->tokens[after].type == TOK_WORD &&
+                strcmp(p->tokens[after].value, "socket") == 0) {
+                advance_parser(p); /* web */
+            }
+            advance_parser(p); /* websocket / ws / socket */
+            if (check_word(p, "to") || check_word(p, "at")) advance_parser(p);
+            ASTNode *url = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = url;
+            return make_builtin_call("__ws_open", args, 1, t->line, t->col);
+        }
+        p->pos = saved;
+    }
+
+    /* "receive from WS" / "receive a message from WS" → __ws_receive(WS) */
+    if (check_word(p, "receive") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* receive */
+        if (check_word(p, "a") || check_word(p, "the")) advance_parser(p);
+        if (check_word(p, "message") || check_word(p, "frame")) advance_parser(p);
+        if (check_word(p, "from")) {
+            advance_parser(p);
+            ASTNode *ws = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = ws;
+            return make_builtin_call("__ws_receive", args, 1, t->line, t->col);
         }
         p->pos = saved;
     }
@@ -2667,6 +2699,71 @@ static ASTNode *parse_statement(Parser *p) {
         p->pos = saved;
     }
 
+    /* "on message [from CONN] do BLOCK end" / "on close do BLOCK end" — inside
+     * a "when someone connects" block. Desugars to:
+     *   __ws_on_message(lambda(connection, message) BLOCK)
+     *   __ws_on_close(lambda(connection) BLOCK)
+     */
+    if (check_word(p, "on") && p->pos + 2 < p->count &&
+        p->tokens[p->pos + 1].type == TOK_WORD) {
+        const char *kind = p->tokens[p->pos + 1].value;
+        int is_msg = strcmp(kind, "message") == 0;
+        int is_close = strcmp(kind, "close") == 0 ||
+                       strcmp(kind, "disconnect") == 0 ||
+                       strcmp(kind, "disconnects") == 0;
+        if (is_msg || is_close) {
+            int saved = p->pos;
+            Token *t = advance_parser(p); /* on */
+            advance_parser(p);              /* message/close */
+            /* Optional "from CONN" or "do" */
+            if (check_word(p, "from")) {
+                advance_parser(p);
+                if (check_type(p, TOK_WORD)) advance_parser(p); /* eat conn name */
+            }
+            if (check_word(p, "do")) advance_parser(p);
+            skip_separators(p);
+
+            NodeList body;
+            parse_block(p, &body);
+            expect_block_end(p, is_msg ? "on-message handler" : "on-close handler");
+
+            int nparams = is_msg ? 2 : 1;
+            char **params = malloc(sizeof(char *) * nparams);
+            params[0] = str_dup_parser("connection");
+            if (is_msg) params[1] = str_dup_parser("message");
+            ASTNode *lambda_node = ast_lambda(params, nparams, NULL, t->line, t->col);
+            lambda_node->as.lambda.body = body;
+
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = lambda_node;
+            return make_builtin_call(
+                is_msg ? "__ws_on_message" : "__ws_on_close",
+                args, 1, t->line, t->col);
+
+            (void)saved;
+        }
+    }
+
+    /* "broadcast EXPR [to all]" → __ws_broadcast(EXPR) */
+    if (check_word(p, "broadcast") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* broadcast */
+        ASTNode *msg = parse_comparison(p);
+        if (!msg) { p->pos = saved; goto not_broadcast; }
+        /* Optional "to all [connections]" */
+        if (check_word(p, "to")) {
+            advance_parser(p);
+            if (check_word(p, "all") || check_word(p, "everyone") ||
+                check_word(p, "every")) advance_parser(p);
+            if (check_word(p, "connections") || check_word(p, "clients"))
+                advance_parser(p);
+        }
+        ASTNode **args = malloc(sizeof(ASTNode *));
+        args[0] = msg;
+        return make_builtin_call("__ws_broadcast", args, 1, t->line, t->col);
+    }
+    not_broadcast:
+
     /* "redirect [permanently] to EXPR" → return __http_redirect(EXPR, permanent?) */
     if (check_word(p, "redirect") && p->pos + 1 < p->count) {
         int saved = p->pos;
@@ -2697,8 +2794,26 @@ static ASTNode *parse_statement(Parser *p) {
         int saved = p->pos;
         Token *t = advance_parser(p); /* close */
         if (check_word(p, "the")) advance_parser(p);
-        if (check_word(p, "database") || check_word(p, "db") ||
-            check_word(p, "connection")) {
+
+        /* WebSocket server-side: "close connection" (uses bound `connection`)
+         * or "close CONN" where CONN is a connection value. */
+        if (check_word(p, "connection")) {
+            advance_parser(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = ast_identifier("connection", t->line, t->col);
+            return make_builtin_call("__ws_close", args, 1, t->line, t->col);
+        }
+        /* WebSocket (server or client — runtime dispatches): "close websocket WS" */
+        if (check_word(p, "websocket") || check_word(p, "ws") ||
+            check_word(p, "socket")) {
+            advance_parser(p);
+            ASTNode *ws = parse_primary(p);
+            ASTNode **args = malloc(sizeof(ASTNode *));
+            args[0] = ws;
+            return make_builtin_call("__ws_close", args, 1, t->line, t->col);
+        }
+        /* SQLite: "close database DB" / "close db DB" */
+        if (check_word(p, "database") || check_word(p, "db")) {
             advance_parser(p);
             ASTNode *db = parse_primary(p);
             ASTNode **args = malloc(sizeof(ASTNode *));
@@ -2841,17 +2956,36 @@ static ASTNode *parse_statement(Parser *p) {
         return ast_return(resp, t->line, t->col);
     }
 
-    /* "send EXPR to URL" → __http_post(URL, EXPR) */
+    /* "send EXPR to TARGET"
+     *   if TARGET is a URL literal (http://… or https://…) → __http_post(URL, EXPR)
+     *   else (an identifier, e.g. "connection" or a websocket handle)
+     *     → __ws_send(TARGET, EXPR)
+     */
     if (check_word(p, "send") && p->pos + 1 < p->count) {
         int saved = p->pos;
         Token *t = advance_parser(p);
         ASTNode *body = parse_comparison(p);
         if (check_word(p, "to")) {
             advance_parser(p);
-            ASTNode *url = parse_comparison(p);
+            /* Peek: if the target token is a URL literal, this is HTTP POST. */
+            int is_http = 0;
+            if (check_type(p, TOK_STRING)) {
+                const char *v = current(p)->value;
+                if (v && (strncmp(v, "http://", 7) == 0 ||
+                          strncmp(v, "https://", 8) == 0)) {
+                    is_http = 1;
+                }
+            }
+            ASTNode *target = parse_comparison(p);
             ASTNode **args = malloc(sizeof(ASTNode *) * 2);
-            args[0] = url; args[1] = body;
-            return make_builtin_call("__http_post", args, 2, t->line, t->col);
+            if (is_http) {
+                args[0] = target; args[1] = body;
+                return make_builtin_call("__http_post", args, 2, t->line, t->col);
+            } else {
+                /* WS send: __ws_send(connection, message) */
+                args[0] = target; args[1] = body;
+                return make_builtin_call("__ws_send", args, 2, t->line, t->col);
+            }
         }
         ast_free(body);
         p->pos = saved;
@@ -2901,9 +3035,15 @@ static ASTNode *parse_statement(Parser *p) {
                 check_word(p, "request")) advance_parser(p);
 
             const char *method = "GET";
+            int is_ws = 0;
             if (check_word(p, "visits") || check_word(p, "requests") ||
                 check_word(p, "opens")) {
                 advance_parser(p);
+            } else if (check_word(p, "connects")) {
+                /* "when someone connects to PATH then BLOCK" — WebSocket route. */
+                advance_parser(p);
+                if (check_word(p, "to")) advance_parser(p);
+                is_ws = 1;
             } else if (check_word(p, "sends")) {
                 advance_parser(p);
                 if (check_word(p, "a") || check_word(p, "an")) advance_parser(p);
@@ -2927,14 +3067,33 @@ static ASTNode *parse_statement(Parser *p) {
 
                 NodeList body;
                 parse_block(p, &body);
-                expect_block_end(p, "route handler");
+                expect_block_end(p, is_ws ? "websocket handler" : "route handler");
 
-                char **params = malloc(sizeof(char *));
-                params[0] = str_dup_parser("request");
-                ASTNode *lambda_node = ast_lambda(params, 1, NULL,
+                int nparams = is_ws ? 2 : 1;
+                char **params = malloc(sizeof(char *) * nparams);
+                if (is_ws) {
+                    params[0] = str_dup_parser("connection");
+                    params[1] = str_dup_parser("message");
+                } else {
+                    params[0] = str_dup_parser("request");
+                }
+                ASTNode *lambda_node = ast_lambda(params, nparams, NULL,
                     p->tokens[saved].line, p->tokens[saved].col);
                 lambda_node->as.lambda.body = body;
 
+                if (is_ws) {
+                    /* __http_add_ws_handler(server, path, message_closure)
+                     * — the block becomes the per-message handler (called
+                     * with `connection` and `message` bound). */
+                    ASTNode **args = malloc(sizeof(ASTNode *) * 3);
+                    args[0] = ast_identifier("server", p->tokens[saved].line,
+                                             p->tokens[saved].col);
+                    args[1] = ast_string_lit(path_tok->value, path_tok->line,
+                                             path_tok->col);
+                    args[2] = lambda_node;
+                    return make_builtin_call("__http_add_ws_handler", args, 3,
+                        p->tokens[saved].line, p->tokens[saved].col);
+                }
                 ASTNode **args = malloc(sizeof(ASTNode *) * 4);
                 args[0] = ast_identifier("server", p->tokens[saved].line,
                                          p->tokens[saved].col);
