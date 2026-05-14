@@ -1,0 +1,14 @@
+-- WebSocket client. Connects to the chat server, sends a few messages,
+-- receives the broadcast echoes back, then closes.
+ws is open websocket to "ws://127.0.0.1:3004/chat"
+
+send "hello chat" to ws
+echo1 is receive from ws
+display "got: " + echo1
+
+send "another message" to ws
+echo2 is receive from ws
+display "got: " + echo2
+
+close websocket ws
+display "done."

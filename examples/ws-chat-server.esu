@@ -1,0 +1,13 @@
+-- Tiny WebSocket chat server. The block runs once per message received
+-- on the /chat route, with `connection` and `message` bound. Every message
+-- gets broadcast to all connected clients (echo-style chat room).
+server is a new http server on port 3004
+
+when someone connects to "/chat" then
+    broadcast message to all connections.
+
+-- A small HTTP route so you can confirm the server is alive
+when someone visits "/" then
+    respond with "WebSocket chat server is running. Connect to /chat.".
+
+start the server

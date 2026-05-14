@@ -25,6 +25,22 @@ EsuValue *esu_http_listen(EsuValue *server);
 EsuValue *esu_http_respond(EsuValue *status, EsuValue *body);
 EsuValue *esu_http_redirect(EsuValue *url, EsuValue *permanent);
 
+/* WebSocket server */
+void esu_http_add_ws_route(EsuValue *server, EsuValue *path, EsuValue *connect_handler);
+void esu_http_add_ws_handler(EsuValue *server, EsuValue *path, EsuValue *message_handler);
+void esu_ws_on_message(EsuValue *handler);
+void esu_ws_on_close(EsuValue *handler);
+void esu_ws_send(EsuValue *connection, EsuValue *message);
+void esu_ws_broadcast(EsuValue *message);
+void esu_ws_close(EsuValue *connection);
+
+/* WebSocket client (blocking) */
+EsuValue *esu_ws_open(EsuValue *url);
+void esu_ws_client_send(EsuValue *handle, EsuValue *message);
+EsuValue *esu_ws_client_receive(EsuValue *handle);
+EsuValue *esu_ws_receive(EsuValue *handle);   /* alias used by __ws_receive */
+void esu_ws_client_close(EsuValue *handle);
+
 /* Request accessors */
 EsuValue *esu_http_req_path(EsuValue *request);
 EsuValue *esu_http_req_method(EsuValue *request);
