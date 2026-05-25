@@ -957,6 +957,38 @@ static ASTNode *parse_primary(Parser *p) {
     }
     not_db_qr:
 
+    /* --- Templates ---
+     *   render TEMPLATE_OR_PATH [with CONTEXT_MAP]
+     * Auto-detects: a string containing '<' or '{' is treated as inline,
+     * otherwise as a file path. Context is optional (empty map if omitted).
+     */
+    if (check_word(p, "render") && p->pos + 1 < p->count) {
+        int saved = p->pos;
+        Token *t = advance_parser(p); /* render */
+        /* Optional decorators: "render the template" / "render a template" */
+        if (check_word(p, "the") || check_word(p, "a") || check_word(p, "an"))
+            advance_parser(p);
+        if (check_word(p, "template")) advance_parser(p);
+
+        ASTNode *tpl = parse_primary(p);
+        if (!tpl) { p->pos = saved; goto not_render; }
+
+        ASTNode *ctx = NULL;
+        if (check_word(p, "with")) {
+            advance_parser(p);
+            ctx = parse_primary(p);
+        }
+        if (!ctx) {
+            /* Empty context: use a literal empty map. */
+            ctx = ast_map_lit(NULL, NULL, 0, t->line, t->col);
+        }
+        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
+        args[0] = tpl;
+        args[1] = ctx;
+        return make_builtin_call("__render", args, 2, t->line, t->col);
+    }
+    not_render:
+
     /* "a new http server on port N" */
     if ((check_word(p, "a") || check_word(p, "an")) && p->pos + 3 < p->count) {
         int saved = p->pos;
@@ -1996,6 +2028,25 @@ static ASTNode *parse_postfix(Parser *p) {
             expr = make_builtin_call("__to_json", args, 1, t->line, t->col);
             continue;
         }
+        /* "x as html" — wraps x in a response map the HTTP server emits
+         * with Content-Type: text/html. Useful as `respond with EXPR as html`. */
+        if (check_two_words(p, "as", "html")) {
+            Token *t = advance_parser(p); advance_parser(p);
+            char **hkeys = malloc(sizeof(char *));
+            hkeys[0] = str_dup_parser("Content-Type");
+            ASTNode **hvals = malloc(sizeof(ASTNode *));
+            hvals[0] = ast_string_lit("text/html; charset=utf-8", t->line, t->col);
+            ASTNode *headers_map = ast_map_lit(hkeys, hvals, 1, t->line, t->col);
+
+            char **akeys = malloc(sizeof(char *) * 2);
+            akeys[0] = str_dup_parser("body");
+            akeys[1] = str_dup_parser("headers");
+            ASTNode **avals = malloc(sizeof(ASTNode *) * 2);
+            avals[0] = expr;
+            avals[1] = headers_map;
+            expr = ast_map_lit(akeys, avals, 2, t->line, t->col);
+            continue;
+        }
         /* "x parsed as json" → __json_parse(x) */
         if (check_word(p, "parsed") && p->pos + 2 < p->count &&
             p->tokens[p->pos + 1].type == TOK_WORD &&
@@ -2926,35 +2977,9 @@ static ASTNode *parse_statement(Parser *p) {
         }
     }
 
-    /* "respond with EXPR [as json]" → return __http_respond(200, EXPR)
-     * "respond with STATUS and EXPR" → return __http_respond(STATUS, EXPR) */
-    if (check_word(p, "respond") && p->pos + 1 < p->count) {
-        Token *t = advance_parser(p);
-        if (check_word(p, "with")) advance_parser(p);
-        ASTNode *first = parse_comparison(p);
-        ASTNode *status_node;
-        ASTNode *body_node;
-        /* Check for "and BODY" pattern: "respond with 201 and EXPR" */
-        if (check_word(p, "and")) {
-            advance_parser(p);
-            status_node = first;
-            body_node = parse_comparison(p);
-        } else {
-            status_node = ast_number_lit(200, t->line, t->col);
-            body_node = first;
-        }
-        /* Check for "as json" postfix */
-        if (check_two_words(p, "as", "json")) {
-            advance_parser(p); advance_parser(p);
-            ASTNode **json_args = malloc(sizeof(ASTNode *));
-            json_args[0] = body_node;
-            body_node = make_builtin_call("__to_json", json_args, 1, t->line, t->col);
-        }
-        ASTNode **args = malloc(sizeof(ASTNode *) * 2);
-        args[0] = status_node; args[1] = body_node;
-        ASTNode *resp = make_builtin_call("__http_respond", args, 2, t->line, t->col);
-        return ast_return(resp, t->line, t->col);
-    }
+    /* NOTE: "respond with EXPR …" is normalized to "return EXPR …" by the
+     * normalizer (esu_normalize), so the heavy lifting for postfix ("as json",
+     * "as html") lives in parse_postfix on the body expression itself. */
 
     /* "send EXPR to TARGET"
      *   if TARGET is a URL literal (http://… or https://…) → __http_post(URL, EXPR)

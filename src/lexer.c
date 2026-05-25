@@ -146,12 +146,16 @@ static Token lex_string(Lexer *lex) {
 
     advance(lex); /* consume opening " */
 
-    /* First pass: scan to see if there's any interpolation */
+    /* First pass: scan to see if there's any interpolation. `{{` is a
+     * literal double-brace (mustache-style) and does NOT count. */
     int save_pos = lex->pos;
     int has_interp = 0;
     while (lex->source[save_pos] != '"' && lex->source[save_pos] != '\0') {
         if (lex->source[save_pos] == '\\') { save_pos += 2; continue; }
-        if (lex->source[save_pos] == '{') { has_interp = 1; break; }
+        if (lex->source[save_pos] == '{') {
+            if (lex->source[save_pos + 1] == '{') { save_pos += 2; continue; }
+            has_interp = 1; break;
+        }
         save_pos++;
     }
 
@@ -216,6 +220,17 @@ static Token lex_string(Lexer *lex) {
             if (len + 1 >= cap) { cap *= 2; buf = realloc(buf, cap); }
             buf[len++] = escaped;
         } else if (peek(lex) == '{') {
+            /* "{{" is a literal '{' followed by another '{' — used by template
+             * engines like Mustache. Emit one '{' verbatim and keep scanning;
+             * the matching "}}" likewise becomes a literal '}}'. */
+            if (lex->source[lex->pos + 1] == '{') {
+                advance(lex); /* consume first '{' */
+                advance(lex); /* consume second '{' */
+                if (len + 2 >= cap) { cap *= 2; buf = realloc(buf, cap); }
+                buf[len++] = '{';
+                buf[len++] = '{';
+                continue;
+            }
             advance(lex); /* consume '{' */
 
             /* Emit the string segment so far */
