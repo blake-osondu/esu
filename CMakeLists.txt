@@ -51,6 +51,7 @@ add_library(esu_runtime STATIC
     runtime/esu_json.c
     runtime/esu_http.c
     runtime/esu_db.c
+    runtime/esu_template.c
 )
 target_link_libraries(esu_runtime PRIVATE m mongoose cjson sqlite)
 target_include_directories(esu_runtime PUBLIC

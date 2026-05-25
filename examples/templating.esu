@@ -1,0 +1,30 @@
+-- Server-side rendering demo. Hosts an HTML page that lists "users".
+-- Inline templates and file templates both work; this example uses both.
+--
+-- Templates use {{name}} (mustache-style braces) for interpolation, so they
+-- don't collide with Esu's own single-brace string interpolation. Control
+-- flow uses {% if %} / {% for each %} / {% end %}.
+
+server is a new http server on port 3005
+
+-- Inline template
+when someone visits "/" then
+    welcome is render "<h1>Hello, {{name}}!</h1><p>Try <a href=\"/members\">/members</a>.</p>" with {"name": "World"}
+    respond with welcome as html.
+
+-- File template + a list of map "users"
+-- (Per-handler var names are deliberately distinct to work around issue #4.)
+when someone visits "/members" then
+    alice is {"name": "Alice", "role": "admin"}
+    bob is {"name": "Bob", "role": "member"}
+    carol is {"name": "Carol & friends", "role": "member"}
+    members-list is [alice, bob, carol]
+    members-page is render "examples/templates/layout.html" with {"title": "Members", "users": members-list, "count": 3}
+    respond with members-page as html.
+
+-- Empty-state branch (the {% if %} else side)
+when someone visits "/empty" then
+    empty-page is render "examples/templates/layout.html" with {"title": "Empty", "users": [], "count": 0}
+    respond with empty-page as html.
+
+start the server

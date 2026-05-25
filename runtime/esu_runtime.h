@@ -15,6 +15,7 @@
 #include "esu_json.h"
 #include "esu_http.h"
 #include "esu_db.h"
+#include "esu_template.h"
 
 void esu_runtime_init(void);
 void esu_runtime_cleanup(void);

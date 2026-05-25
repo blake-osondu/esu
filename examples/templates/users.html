@@ -1,0 +1,10 @@
+{% if users %}
+<p>Members ({{count}}):</p>
+<ul>
+  {% for each u in users %}
+    <li><strong>{{u.name}}</strong> &mdash; {{u.role}}</li>
+  {% end %}
+</ul>
+{% else %}
+<p class="empty">No members yet.</p>
+{% end %}
